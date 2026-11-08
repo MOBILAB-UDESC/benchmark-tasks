@@ -1,0 +1,23 @@
+{
+  "title": "Feed filament into the feeder on top of a 3D printer",
+  "category": "Impact on jobs",
+  "keywords": [
+    "3D printing",
+    "fab lab",
+    "flexible filament",
+    "peg in hole",
+    "tight clearance",
+    "bimanual",
+    "insertion",
+    "reach overhead"
+  ],
+  "instruction": "Feed the free end of the orange filament into the brass inlet of the black feeder on top of the printer, at its back right, until at least 2 cm of it is inside, then let go.",
+  "context": "Loading an enclosed 3D printer by hand: the filament comes off the spool on the printer's side holder and its cut end is pushed into the feeder on the roof, a funnel narrowing to a bore barely wider than the filament. Springy filament held a few centimetres back droops and kinks when pushed off its axis, so both hands keep it straight while they lift it over the roof and feed it in.",
+  "setup": "Left and right are the robot's. Positions are centres in metres from the midpoint between the two arm bases: x forward, y to the robot's left, heights above the table top. Printer: an enclosed desktop 3D printer, 36 x 35 x 40 cm, fixed, centred on y = 0 from x = 0.31 to 0.67, its front toward the robot: light grey base and panels, black frame, glass roof, clear door shut. Spool holder on its left wall: a black bracket plate (10 x 14 cm) at x = 0.48, a 45 mm steel rod along y, 22 cm up, from a 7 cm stop collar 3 cm long out to y = 0.31, its last 2 cm chamfered. Spool on the rod: 20 cm across, 7 cm wide, black flanges, wound with orange 1.75 mm PLA to 16 cm across, 0.5 kg, centred at (0.48, 0.248), 22 cm up. It turns freely. Feeder on the roof at the back right: a black block on an aluminium riser, x 0.495 to 0.595, y -0.175 to -0.13, 40 to 52 cm up, a stepper motor under it. Its brass inlet faces left (+y), its mouth's centre at (0.545, -0.13), 47.5 cm up: a 6 mm square funnel narrowing over 5 mm to a 2.4 mm square bore 3 cm deep, closed at its end. Blocks: two steel 1-2-3 blocks (2.54 x 5.08 x 7.62 cm) lying flat on the table, long side along y, at (0.25, -0.102) and (0.25, 0.045). Filament: 67.5 cm of orange 1.75 mm PLA. Its cut end lies at (0.25, -0.12) on the first block, pointing right. Its last 31 cm lie straight along y across both blocks, then it drops to the table, curls left (6 cm radius) to run along x beside the printer's left wall, bends up under the spool and rises to the front of its winding, where it comes off. Nothing else is on the table.",
+  "scoring": "Positions are centres. Depth: how far the free end is past the funnel's mouth (the feeder's face), along the inlet's axis. In the inlet: the free end within 2.5 mm of that axis. Held: a gripper closed on the filament (pads 1.25 to 4.75 mm apart, within 1.5 cm of it). Still: no point of the filament moved 2 mm or more over the last second. 1.0 (success, held 1 s): the end 2 cm or more deep and in the inlet, not held, and still. 0.5: the end 5 mm or more deep and in the inlet otherwise. 0.25: the end within 1 cm of the mouth's centre. 0 otherwise. 0 whatever else if the filament kinked (two points 2.5 cm apart along it 60 degrees or more out of line, at any time), came off the spool, fell off the table (2 cm below its top), or the spool came off its rod (1 cm).",
+  "run_limit": "1,200 steps (1 minute at 20 Hz)",
+  "reset_notes": "Pull the filament out of the inlet, turn the spool back so the filament comes off the front of its winding, and lay the filament back as in the setup: down to the table, round the printer's front left corner and straight over the block, its end toward the robot's right.",
+  "fidelity": "Rigid bodies, 240 Hz physics, 20 Hz control. The filament is 27 rigid 2.5 cm links on joints sprung to its laid shape with PLA's bending stiffness: it bends and springs back only at joints, and a kink is a scored angle. Links weigh 1 g (13 times real PLA). Its spool end is a joint on the winding, so a long pull would wrap it rather than pay out. Funnel and bore are true-size square box colliders, slick, closed after 3 cm. Printer, holder, feeder and blocks are fixed.",
+  "scores": "Dream-1 run: 0.0 (the left hand reaches toward the spool and the right hand wanders by the printer, neither picks up the filament's end), demo: 1.0 (success at step 451)",
+  "media": "M-SVM6K4"
+}
