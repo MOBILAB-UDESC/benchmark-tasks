@@ -1,0 +1,21 @@
+{
+  "title": "Lift a long thin panel at points that keep it flat",
+  "category": "Impact on jobs",
+  "keywords": [
+    "bimanual",
+    "flexible panel",
+    "grasp point selection",
+    "sag",
+    "crack limit",
+    "PCB panel handling"
+  ],
+  "instruction": "Carry the long blue circuit-board panel to the orange rack with both arms and set it down on the rack's rail.",
+  "context": "Production workers who move PCB panels (51-9199) and glaziers who carry long panes (47-2121) know a long thin panel cracks if it bows. A populated panel loses ceramic capacitors and solder joints at about 4 mm of bow. Lifted by its two ends, this panel's middle sags well past that, and held near its middle both ends droop. Held about a fifth of its length in from each end, it stays flat. The instruction names no hold points: the robot must pick where to hold a bending part, which a rigid pick and place never asks.",
+  "setup": "Positions are centres in cm from the midpoint between the two arm bases: x forward, y to the robot's left, heights above the table top. Bench rail: a black aluminium bar 3.6 x 64 x 1.2 cm (64 cm along y) centred at (26, 0), its top 3 cm above the table, on three 2 x 2 cm dark steel legs at y = -28, 0 and 28, fixed. Panel: a blue FR-4 circuit-board panel 60 x 6 x 0.6 cm (60 cm along y), six 10 cm boards in one panel with traces, small parts, V-score lines and tooling holes, populated, 120 g, bending stiffness EI = 0.07 N m2 (a 0.8 mm FR-4 strip bends the same), centred at (26, 0) and lying on the bench rail with its lower face on the rail's top. Rack: an orange aluminium bar 3.6 x 64 x 1.2 cm (64 cm along y) centred at (40, 0), its top 8 cm above the table (5 cm above the bench rail), on three 2 x 2 cm dark steel legs at y = -28, 0 and 28, fixed. Nothing else is on the table.",
+  "scoring": "Bow is the largest gap under a straightedge laid along the panel's top face from one end to the other, read anywhere along it. In the simulator the scorer takes the centres of the panel's 20 segments at every control step and the bow is the greatest distance of any centre from the straight line through the first and the last. Peak bow is the largest bow at any step of the trial. 0 if the peak bow goes over 4 mm at any step (the panel cracks), if any part of the panel falls more than 2 cm below the table top, or if the whole panel was never lifted clear (every segment at least 3 cm above its start height at the same step). Otherwise 1.0 (success, held 1 s) if at the end the panel lies on the rack's rail, still, with a peak bow of 3 mm or less. 'On the rail' means every segment's centre within 2 cm of the rail's line along x and within 4 mm of lying on it, and the panel's centre within 2 cm of the rail's middle along y. 'Still' means every segment under 1 cm/s and 0.5 rad/s. 0.75 if it lies still on the rack with a peak bow over 3 mm and up to 4 mm. 0.5 if it was lifted clear with a peak bow of 4 mm or less but does not end still on the rack (still carried, or set down anywhere else, the bench rail included). So 0, 0.5, 0.75 or 1.0. Doing nothing scores 0.",
+  "run_limit": "600 steps (30 seconds at 20 Hz)",
+  "reset_notes": "Lay the panel back on the bench rail, centred at x = 26 cm, flat, with its lower face on the rail. Run with -E object_jitter=0: the demo is open loop and the panel is never jittered. Check it is straight before each trial: a panel that was bowed past 4 mm is cracked, so a real trial needs a fresh one.",
+  "fidelity": "Rigid bodies, 240 Hz physics, 20 Hz control. The panel is 20 rigid 3 cm segments on hinges with springs set to EI = 0.07 N m2 (a 0.8 mm FR-4 strip), drawn and collided 6 mm thick so a gripper can hold it, 120 g populated. It bends in one plane only, no twist and no sideways bend. Nothing cracks: the 4 mm limit is only scored. Rails are fixed boxes. Pads close at 50 N. Parts and traces are drawn, not modelled.",
+  "scores": "Dream-1 run: 0.0 (both hands close on the panel's very ends, it is never lifted toward the rack), demo: 1.0 (success at step 232)",
+  "media": "M-MKDA7S"
+}
