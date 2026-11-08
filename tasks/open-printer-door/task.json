@@ -1,0 +1,23 @@
+{
+  "title": "Open a light 3D printer's door past its magnetic catch, steadying the printer",
+  "category": "Impact on jobs",
+  "keywords": [
+    "3D printing",
+    "makerspace",
+    "bimanual",
+    "articulated object",
+    "door",
+    "magnetic catch",
+    "steadying",
+    "avoid contact"
+  ],
+  "instruction": "Open the clear front door of the 3D printer all the way, until it stays open by itself. Hold the printer still with your other hand while you pull, and do not touch the print head or the orange print inside.",
+  "context": "Before every print removal or filament change, a technician opens the printer's door. Desktop printers are light and their doors are held by magnets: a one-handed yank drags the printer across the bench and can knock the head or a fragile finished print, so one hand steadies the printer while the other opens the door and swings it into its open stop.",
+  "setup": "Left and right are the robot's. Positions are centres in metres from the midpoint between the two arm bases: x forward, y to the robot's left, heights above the table. 3D printer: an enclosed desktop FDM printer 36 x 35 x 40 cm, 2.5 kg (light grey plastic base and panels, black aluminium frame, glass roof, a small screen on its sloped front), centred at (0.58, 0.0), facing the robot, standing loose on four hard plastic feet (friction 0.28 on the table, so about 7 N slides it). The base's flat top in front of the door is a 4.5 cm deep ledge, 8 cm high, from x 0.425 to 0.47. Door: 33 x 29 cm tinted clear acrylic, 0.5 kg, in a black border, shut over the 31 cm wide opening (8 to 36 cm high), on a vertical hinge at its left edge (axis at x 0.469, y 0.170). A magnetic catch holds it shut until about 10 N is pulled at the handle. Then it swings freely. From 80 degrees a detent pulls it to its open stop at 95 degrees and holds it there (the hinge stops at 110). Handle: a vertical aluminium bar, 12 mm thick and 12 cm long, 3 cm off the door's outside face at y -0.136, from 17 to 29 cm high. Inside: a gold build plate on the black bed (its top 10 cm high), the light grey print head (6 x 6 x 8 cm) parked at the front of its gantry at (0.55, 0.07), nozzle 23 cm high, on a soft slide, and a finished orange PLA vase (5 x 5 x 9 cm, 30 g) standing loose on the plate at (0.52, -0.05), 5 cm behind the door. Nothing else is on the table.",
+  "scoring": "Door angle: between the door and the printer's front, 0 shut. Recorded for the rest of the trial and scoring 0: the printer moved (a corner of its base 1 cm or more from where it started), or something struck the head or the vase (the head 3 mm or more off its parked place, the vase 5 mm or more from its place or leaning 10 degrees or more, both measured relative to the printer). 1.0 (success, held 1 s): the door open 90 degrees or more and still. 0.5: open 45 degrees or more. 0.25: open 10 degrees or more (past the catch). 0 otherwise.",
+  "run_limit": "1,200 steps (1 minute at 20 Hz)",
+  "reset_notes": "Shut the door until its catch takes it, put the printer back at its place (mark its feet on the table), park the head at the front left and stand the vase back at its place on the plate.",
+  "fidelity": "Rigid bodies, 240 Hz physics, 20 Hz control. The printer, its door and the head collide as boxes (base, bed, walls, roof, front frame, gantry, door panel and handle). The hinge is a revolute joint with a little friction. The catch is a second joint that locks the door's turn and breaks at 3.1 N m (10 N at the handle). The detent is a spring torque applied past 80 degrees. The head is on a sprung slide. The meshes are drawn on the boxes.",
+  "scores": "Dream-1 run: 0.0 (both arms reach to the printer's front and sides but never pull the door's handle), demo: 1.0 (success at step 467)",
+  "media": "M-YTQFU3"
+}
