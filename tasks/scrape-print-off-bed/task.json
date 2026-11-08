@@ -1,0 +1,23 @@
+{
+  "title": "Scrape a stuck print off the build plate inside a 3D printer",
+  "category": "Impact on jobs",
+  "keywords": [
+    "3D printing",
+    "makerspace",
+    "tool use",
+    "scraper",
+    "wedge",
+    "adhesion",
+    "reach into an enclosure",
+    "do not disturb the fixture"
+  ],
+  "instruction": "Use the scraper with the black handle to free the green print from the gold build plate inside the printer, and put the print in the blue basket. Leave the plate in the printer and the scraper on the table.",
+  "context": "Makerspace and print farm technicians take every finished print off the printer's removable build plate. A well-stuck print does not come off by pulling: the plate's magnets give first and the plate lifts out. The scraper's thin blade, reached into the printer and slid along the plate under the print's chamfered edge, levers it free.",
+  "setup": "Left and right are the robot's. Positions are centres in metres from the midpoint between the two arm bases: x forward, y to the robot's left, heights above the table. 3D printer: an enclosed desktop FDM printer 36 x 35 x 40 cm (light grey plastic base and panels, black aluminium frame, glass roof, a small screen on its sloped front), fixed, centred at (0.49, 0.0), facing the robot. Its door, 33 x 29 cm tinted clear acrylic in a black border with a bar handle, is swung fully open (180 degrees) and stands beside the printer's left side, from x 0.38 to 0.43 and y 0.18 to 0.50. The door opening is 31 cm wide, from 8 to 36 cm high. Inside, the black heated bed's top is 10 cm high, from x 0.395 to 0.635, y -0.12 to 0.12, and the light grey print head (6 x 6 x 8 cm) is parked above it at (0.46, 0.07), its nozzle 23 cm high. Build plate: a 24 x 24 cm spring-steel sheet, 1 mm thick, 250 g, textured gold PEI on top, on the bed, centred at (0.515, 0.0), held by the bed's magnets (they let go at 5 N). Print: a green PLA open box 6 x 6 x 3 cm, 40 g, stuck to the plate at (0.45, -0.06) (the bond holds 60 N), its front edge 2.5 cm behind the plate's front edge. Its first 2 mm are chamfered in: it stands on a 3.6 x 3.6 cm foot, leaving a 2 mm gap 12 mm deep under every edge. Scraper: a 4 cm wide steel blade 10 cm long and 1 mm thick in a black rubber handle 12 x 2.8 x 2.2 cm, 80 g, 22 cm overall, lying flat on the table along x at (0.22, -0.27), right of the printer, blade toward it. Basket: a blue perforated plastic basket 15 x 20 x 8.6 cm (20 cm along y), fixed, centred at (0.22, 0.28). Nothing else is on the table.",
+  "scoring": "Positions are centres. The blade counts as under the print's edge when a point of its front edge is 3 mm or more inside the print's outline and less than 4 mm above the print's bottom for 0.5 s in a row (the print's bond then lets go). 0 for the rest of the trial once the plate's highest point has risen 2 cm, and 0 if the print or the scraper falls off the table. 1.0 (success, held 1 s): the print still in the basket (centre within 5.5 cm along x and 8 cm along y of its centre, below its rim), the blade has been under its edge, the plate within 5 mm of where it was, the scraper lying still on the table outside the printer's and the basket's footprints. 0.5: the print 5 cm or more from its place on the plate but not all of success. 0.25: the blade under the print's edge. 0 otherwise.",
+  "run_limit": "2,400 steps (2 minutes at 20 Hz)",
+  "reset_notes": "Clean the plate and stick a fresh print of the same part at its place (or glue the same one down with a few drops of print-bed adhesive, cured). Put the plate back on the bed, square with it, and the scraper back in its place.",
+  "fidelity": "Rigid bodies, 240 Hz physics, 20 Hz control. Everything collides as boxes: the printer as its base, bed, walls, roof, front frame and gantry, the print as a body on a smaller foot, the scraper as a handle and a 1 mm blade (friction 0.15). The adhesion and the magnets are fixed joints that break at 60 N and 5 N. Peeling is not simulated: the print's bond is released once the blade has been under its edge for 0.5 s. The plate does not flex. The basket is a SimReady model.",
+  "scores": "Dream-1 run: 0.0 (the right arm reaches into the printer toward the green print but never picks up the scraper), demo: 1.0 (success at step 500)",
+  "media": "M-YU6VSC"
+}
