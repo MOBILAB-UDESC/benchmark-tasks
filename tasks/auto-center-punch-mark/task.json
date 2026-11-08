@@ -1,0 +1,22 @@
+{
+  "title": "Mark a cross's centre with an automatic centre punch",
+  "category": "Impact on jobs",
+  "keywords": [
+    "machining",
+    "centre punch",
+    "spring trip",
+    "slip",
+    "irreversible action",
+    "tool use",
+    "fab lab"
+  ],
+  "instruction": "Mark the centre of the scribed cross on the blue steel plate with the red automatic centre punch, once, then lift the punch clear of the plate and hold it still.",
+  "context": "Done by machinists (O*NET 51-4041) before drilling: an automatic centre punch fires when its barrel has been pushed a set distance, with no hammer. The hardened tip skates on smooth steel while the push builds toward the trip, and the shot can't be undone: a tip set beside the cross, tilted or leaned on from the side slides before it fires and the dent is wrong. A second shot leaves a second dent.",
+  "setup": "Left and right are the robot's. Positions are centres in metres from the midpoint between the two arm bases: x forward, y to the robot's left, heights above the table top. Plate: steel, 11 x 7 x 1.2 cm, fixed, coated with blue layout dye, centred at (0.30, -0.33), top 1.2 cm up. A scribed cross on it, two bright lines 2.4 cm long and 0.7 mm wide crossing at (0.31, -0.324), off the plate's centre. Tool holder: a dark block 4 x 4 x 2.8 cm, fixed, centred at (0.27, -0.14), with a 2.1 cm square pocket 1 cm deep and a 7 mm hole in its floor. Automatic centre punch standing in the holder, its nose on the pocket's floor and its 3 mm hardened tip in the hole: a steel nose 1.6 cm square with a stem up through a red barrel 2.2 x 2.2 x 8.5 cm (6.1 to 14.6 cm up, 0.12 kg) that slides down over the stem against a spring of 1500 N/m, up to 11 mm. The nose with its tip is 40 g. Nothing else is on the table.",
+  "scoring": "Shot: the punch fires when its barrel has been pushed 7 mm down over its nose (10.5 N), and is cocked again once the barrel has come back up to within 3 mm. The mark is where the tip's underside is at the moment of each shot, and a shot counts as on the plate if the tip is then within 2 mm of the plate's top. Offset: the mark's distance across the plate from the cross's centre, measured on a photo with a scale. Clear: the tip 2 cm or more above the plate's top. Still: neither the nose's nor the barrel's centre has moved 1 mm or more over the last second. 1.0 (held 1 s): exactly one shot, on the plate, within 0.5 mm, with the punch clear and still. 0.5: exactly one shot on the plate within 1 mm (including within 0.5 mm when not yet clear and still). 0.25: exactly one shot on the plate within 2 mm. 0 otherwise: no shot, two or more shots, a shot off the plate, or more than 2 mm off. 0 as well if the punch fell off the table (2 cm below its top).",
+  "run_limit": "1,200 steps (1 minute at 20 Hz)",
+  "reset_notes": "Stand the punch back in the holder, nose on the pocket's floor, barrel up. The first dent can't be removed: use a fresh plate or a fresh part of it with the cross scribed at (0.31, -0.324).",
+  "fidelity": "Rigid bodies, 240 Hz physics, 20 Hz control. The punch is two rigid bodies on a sprung slide; the shot is a trip on the barrel's travel read by the scorer, with no hammer blow and no dent in the plate. The tip is a 3 mm square, friction 0.15 against the plate (a hardened tip on dyed steel, the lower of the two wins). Plate and holder are fixed. The cross is a drawn texture. Tip and nose weigh 40 g.",
+  "scores": "Dream-1 run: 0.0 (the right hand tips the red punch over and drags it beside the plate, it never fires on the cross), demo: 1.0 (success at step 460)",
+  "media": "M-WZPHBU"
+}
