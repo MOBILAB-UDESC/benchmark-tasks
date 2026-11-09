@@ -1,0 +1,22 @@
+{
+  "title": "Seat a heat-set insert flush with a soldering iron",
+  "category": "Impact on jobs",
+  "keywords": [
+    "3D printing",
+    "fab lab",
+    "heat-set insert",
+    "soldering iron",
+    "depth control",
+    "tool use",
+    "assembly"
+  ],
+  "instruction": "With the soldering iron (blue handle), push the brass threaded insert into the hole in the white printed bracket until its top is flush with the bracket's face and it sits straight, then take the iron away.",
+  "context": "Done by team assemblers (O*NET 51-2092) in any shop that prints parts: a brass insert is pressed into a printed hole with a hot iron, the plastic flows round it and sets. The insert keeps sinking for as long as the iron pushes, so the push has to stop at flush: a push that carries on buries it and the thread is lost, and a tilted iron sets it crooked. Pushing hard until something stops it is the obvious strategy, and nothing stops it.",
+  "setup": "Left and right are the robot's. Positions are centres in metres from the midpoint between the two arm bases: x forward, y to the robot's left, heights above the table top. Bracket: a white 3D-printed block, 3 x 5 x 8 cm, fixed, standing on the table with its face toward the robot at x = 0.44 (centre x 0.455, y = -0.06). In the face, 6.6 cm up on its midline, is a round 5.6 mm hole, 10.5 mm deep. Insert: a brass heat-set threaded insert, 6 mm across and 8 mm long with a bore through it, 4 g. It sits on the hole's mouth, axis along x, its threaded end toward the robot, so its top stands 8 mm proud of the face. Iron: a soldering iron 22 cm long and 2 cm thick, 60 g, with a blue handle (11 cm), a steel barrel (6.5 cm, 8 mm) and a 2.6 mm square pusher tip with a flat face (4.5 cm), centred at (0.25, -0.26), 5.5 cm up, its tip pointing +x toward the bracket. Stand: a black base 19 x 7 x 1.2 cm centred at (0.25, -0.26) with a chrome rest under the handle (at 8.5 cm behind the iron's centre) and a chrome cradle under the barrel (4 cm ahead of it); a brass-wool tin sits at its far end. Nothing else is on the table.",
+  "scoring": "Positions are of the insert's top face (its end toward the robot). Proud: how far the top stands out of the face, along the hole's axis (8 mm at the start, 0 when flush, negative when buried). Square: the angle between the insert's axis and the hole's. Clear: the iron's tip face at least 1 cm from the hole's mouth. Still: the insert under 1 cm/s and 0.5 rad/s. 1.0 (success, held 1 s): proud within 0.3 mm of 0, square within 3 degrees, still, and the iron clear. 0.5 otherwise: proud within 1 mm of 0 and square within 8 degrees. 0.25 otherwise: proud no more than 4 mm (at least half in) and not buried. 0 otherwise. 0 whatever else if the insert is buried at the end (its top more than 1 mm below the face), if at any time a point of the iron's tip (corners of its face, or 1 cm back) is at the face's plane or past it and more than 3 mm from the hole's axis (across or up), or if the iron or insert falls off the table (2 cm below its top).",
+  "run_limit": "1,200 steps (1 minute at 20 Hz)",
+  "reset_notes": "Pull the insert back out to stand on the hole's mouth, 8 mm proud, square to the face, and lay the iron back on its stand with its tip toward the bracket.",
+  "fidelity": "Rigid bodies, 240 Hz physics, 20 Hz control. Heat is not modelled: the insert is a box on a joint that sinks only along the hole, at 4 mm/s for each newton pushed on it (a damper, no spring), stays where it is left, and cocks up to 10 degrees about its centre against a damper (0.05 N m s/rad) under a torque off its axis. The hole's colliders are 8 mm square, wider than the drawn 5.6 mm hole. The iron is cold, with a flat 2.6 mm square tip.",
+  "scores": "Dream-1 run: 0.0 (the right hand reaches to the iron on its stand but never lifts it, the insert is never pressed in), demo: 1.0 (success at step 395)",
+  "media": "M-NPHCV5"
+}
