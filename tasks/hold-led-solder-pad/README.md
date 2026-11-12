@@ -81,6 +81,8 @@ inspect-robots run --embodiment yam_arena --policy yam_scripted \
   held iron's sag. The tip's point stays within 1 mm of a pad's centre through the hold and presses on the board with
   1 to 1.5 N in some of every step's 12 physics substeps, the contact counts from about step 252, and the demo reaches 1.0 and ends on success at step 509 (25.5 s at 20 Hz). A trial takes about 2
   minutes on an L40S with the window open (`-E headless=false`), including startup.
+- The hovering shortcut scores 0: the same demo with the tip sent 1.5 mm short of the pad (`PRESS=-0.0015`, scripted by
+  `scripts/task-ablate.sh`) holds the LED flush the whole time but carries no iron-on-board contact force, and scores 0.
 - Dream-1 was not run on this version of the scorer. The earlier Dream-1 score (0.0) was for the proximity scorer.
 - The one-handed shortcut scores 0: the same demo with the left arm staying back (`HOLD_LED = False`) touches the pad
   with the LED still 3 mm out, and scores 0 to the end of the trial.
