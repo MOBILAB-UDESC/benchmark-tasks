@@ -18,5 +18,5 @@
   "reset_notes": "Slide the LED back out until its body stands 3 mm off the board, and lay the iron back in its stand, tip in the spiral and handle on the rest.",
   "fidelity": "Rigid bodies, 240 Hz physics, 20 Hz control. The board, holder and stand are fixed boxes. The iron is one rigid body of three boxes (handle, barrel, tip). The LED is a 5 g box on a sliding joint along its legs, which do not collide. Contact is the physics engine's contact force. No heat or solder: soldering is a 2 s contact timer, and the iron is cold. The meshes are drawn only. Friction 1.2 static on every part.",
   "scores": "Demo: 1.0 (success at step 509, finger and iron contact forces from the simulator). Dream-1: 0.0 (ran to the step limit without finishing).",
-  "media": "M-5UMQ2A"
+  "media": "M-3J54PY"
 }
