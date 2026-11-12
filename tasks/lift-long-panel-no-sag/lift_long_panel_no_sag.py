@@ -1,13 +1,15 @@
-"""On the station table, between the two arms: a long thin blue circuit-board panel (60 x 6 cm, 6 mm thick, populated,
+"""On the station table, between the two arms: a long thin blue circuit-board panel (60 x 6 cm, 0.8 mm FR-4, populated,
 120 g) lies along y on a low black bench rail (3 cm high, centred at x = 0.26). It is a strip that bends: held by
 its two ends it sags in the middle, and held near the middle it droops at both ends. An orange rack stands 14 cm
 farther from the robot, a rail 8 cm high along y (centred at x = 0.40). Each arm works in its own half, the right arm
 at y < 0 and the left arm at y > 0.
 
-The task: carry the panel to the rack and set it down on the rack's rail, holding it with both arms. The panel is a
-chain of 20 rigid segments on springy hinges (``panelkit.py``) that bends like a 0.8 mm FR-4 strip, and its crack
-limit is a bow of 4 mm: the gap under a straightedge laid end to end along it. Lifted by its ends, it bows
-several times that. Held about a fifth of its length (12 cm) in from each end, it stays flat to about 1 mm.
+The task: carry the panel to the rack, set it down on the rack's rail and let go, holding it with both arms. The panel
+is a chain of 20 rigid segments on springy hinges (``panelkit.py``), each 3 x 6 cm and 0.8 mm thick like the board
+itself, that bends like the 0.8 mm FR-4 strip it stands for. Its flatness limit is a bow of 4 mm: the gap between
+the panel and the straight line from one end to the other. Lifted by its ends, it bows several times that. Held about
+a fifth of its length (13 cm) in from each end, it stays flat to about 1 mm. Full credit needs the panel lying on the
+rack's rail, still, with both grippers' fingers clear of it (``fingers.py`` reads where they are).
 
 Run it:  inspect-robots run --embodiment yam_arena -E task=lift_long_panel_no_sag.py --scorer task_score ...
 """
@@ -21,7 +23,8 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 import numpy as np  # noqa: E402
-from panelkit import bow, dress, on_reset, panel, panel_look  # noqa: E402
+from fingers import finger_points  # noqa: E402
+from panelkit import bow, dress, on_reset, on_step, panel, panel_look  # noqa: E402
 from yam_arena.demo import FINGER_CLOSED, FINGER_OPEN, Waypoint  # noqa: E402
 from yam_arena.task_file import TABLE_TOP, Box  # noqa: E402
 
@@ -30,9 +33,10 @@ TOP = TABLE_TOP[SCENE]
 SUCCESS_HOLD_S = 1.0
 
 # -- the panel ---------------------------------------------------------------------------------------------------------
-PANEL_LENGTH, PANEL_WIDTH, PANEL_THICK = 0.60, 0.06, 0.006
-PANEL_MASS = 0.12  # kg, populated
-PANEL_EI = 0.07  # N m^2: the bending stiffness of a 0.8 mm FR-4 strip 6 cm wide
+PANEL_LENGTH, PANEL_WIDTH, PANEL_THICK = 0.60, 0.06, 0.0008  # a 0.8 mm FR-4 strip, and its colliders are as thin
+PANEL_MASS = 0.12  # kg, populated: about 53 g of bare laminate and 67 g of parts, six equal groups (see the README)
+PANEL_EI = 0.07  # N m^2: measured on the real panel (cantilever test in the README): about 0.056 for the laminate
+# (22 GPa) and the rest for the copper
 SEGMENTS = 20
 BLUE = (0.04, 0.22, 0.85)
 
@@ -77,17 +81,45 @@ BOW_CLEAN = 0.003  # m: a full score needs the peak bow of the whole trial at or
 LIFT_CLEAR = 0.03  # m: every segment this far above its start height at some step: the panel was lifted clear
 ON_RACK_X = 0.02  # m: every segment's centre within this of the rack's line
 ON_RACK_Y = 0.02  # m: the panel's centre within this of the rack's middle along y
-ON_RACK_Z = 0.004  # m: every segment's centre this close to lying on the rack's rail
+ON_RACK_Z = 0.001  # m: every segment's centre within this of lying on the rack's rail (its lower face on the rail)
+FINGER_CLEAR = 0.003  # m: no finger of either gripper within this of any part of the panel: it is let go
 OFF_TABLE_Z = -0.02  # m above the table: a segment lower than this has fallen off
 
-# What the episode remembers: the peak bow so far, and whether the whole panel was ever lifted clear.
-STATE = {"peak": 0.0, "lifted": False}
+# What the episode remembers: the peak bow so far, whether the whole panel was ever lifted clear, and whether a finger of
+# either gripper is on the panel right now (read every control step from the running simulation).
+STATE = {"peak": 0.0, "lifted": False, "touched": False}
 
 
 @on_reset
 def reset_memory(env=None) -> None:
-    STATE["peak"] = 0.0
-    STATE["lifted"] = False
+    STATE.update(peak=0.0, lifted=False, touched=False)
+
+
+def touching(objects, fingers: np.ndarray) -> bool:
+    """Whether any point on a gripper's fingers (an (n, 3) array, the fingers' collision meshes) is within
+    ``FINGER_CLEAR`` of the panel: its 20 boxes, each 3 cm x 6 cm x 0.8 mm, turned by the segment's pitch."""
+    p = objects["panel"]
+    ell = PANEL_LENGTH / SEGMENTS
+    half = np.array([PANEL_WIDTH / 2, ell / 2, PANEL_THICK / 2])
+    for centre, pitch in zip(p.points, p.tilts):
+        d = np.asarray(fingers, float) - centre
+        u = np.array([0.0, math.cos(pitch), math.sin(pitch)])  # along the segment
+        w = np.array([0.0, -math.sin(pitch), math.cos(pitch)])  # its thickness
+        local = np.stack([d[:, 0], d @ u, d @ w], axis=1)
+        outside = np.maximum(np.abs(local) - half, 0.0)
+        if np.any(np.linalg.norm(outside, axis=1) <= FINGER_CLEAR):
+            return True
+    return False
+
+
+@on_step
+def watch(env) -> None:
+    """Every control step: whether a finger is on the panel, into the episode's memory."""
+    from yam_arena.scene import object_states
+
+    objects = object_states(env, ["panel"])
+    if np.all(np.isfinite(objects["panel"].points)):
+        STATE["touched"] = touching(objects, finger_points(env))
 
 
 def _violation(objects) -> bool:
@@ -122,12 +154,17 @@ def _settled(objects) -> bool:
     return bool(objects["panel"].resting())
 
 
+def _let_go(objects) -> bool:
+    """On the rack's rail, still, and no finger on it."""
+    return bool(on_rack(objects) and _settled(objects) and not STATE["touched"])
+
+
 def success(objects) -> bool:
-    """The panel lies still on the rack, and its bow never went over 3 mm."""
+    """The panel lies still on the rack with the grippers off it, and its bow never went over 3 mm."""
     if _violation(objects):
         return False
     _remember(objects)
-    return bool(STATE["lifted"] and STATE["peak"] <= BOW_CLEAN and on_rack(objects) and _settled(objects))
+    return bool(STATE["lifted"] and STATE["peak"] <= BOW_CLEAN and _let_go(objects))
 
 
 def distance(objects) -> float:
@@ -138,14 +175,14 @@ def distance(objects) -> float:
 
 def score(objects) -> float:
     """0 if the panel bowed more than 4 mm at any step (it cracked), fell off the table, or was never lifted clear.
-    Otherwise 1.0 if it lies still on the rack with a peak bow of 3 mm or less, 0.75 if it lies still on the rack
-    after a peak bow between 3 and 4 mm, and 0.5 for any other end (still carried, or set down off the rack)."""
+    Otherwise 1.0 if it lies still on the rack, let go, with a peak bow of 3 mm or less, 0.75 if it does after a peak
+    bow between 3 and 4 mm, and 0.5 for any other end (still carried or held, or set down off the rack)."""
     if _violation(objects):
         return 0.0
     _remember(objects)
     if STATE["peak"] > BOW_LIMIT or not STATE["lifted"]:
         return 0.0
-    if on_rack(objects) and _settled(objects):
+    if _let_go(objects):
         return 1.0 if STATE["peak"] <= BOW_CLEAN else 0.75
     return 0.5
 
@@ -156,7 +193,7 @@ def score(objects) -> float:
 # Numbers are TCP positions. A quarter turn closes the fingers along x, across the narrow panel: the left arm turns
 # one way, the right arm the other, the way each wrist reaches.
 GRIP_Y = 0.17  # m from the panel's middle: 13 cm in from each end
-GRIP_Z_OFF = 0.0035  # the TCP this high above the panel's lower face: the pads' tips reach 1 cm under the panel
+GRIP_Z_OFF = 0.0009  # the TCP this high above the rail: level with the panel's middle, so the pads' tips reach 1.3 cm under it
 TRAVEL_Z = TOP + 0.16
 TURN = math.pi / 2
 

@@ -6,7 +6,7 @@ The physics stays the task file's boxes and the panel's 20 segment boxes. Each l
 ``panelkit.py`` puts on a box, which is then hidden but still collides.
 
 - ``panel_00.usdc`` .. ``panel_19.usdc``: the circuit-board panel, one file per segment, each modelled around its
-  segment's centre in the segment's frame (x along the panel, y across, z up) and filling its 3 x 6 x 0.6 cm box
+  segment's centre in the segment's frame (x along the panel, y across, z up) and filling its 3 x 6 x 0.08 cm box
   exactly (checked). One texture runs over all of them: six small boards in one panel, with traces, pads,
   parts, silkscreen, V-score lines, tooling holes and fiducials.
 - ``bench.usdc``: the black bench rail and its three legs, around the bar's centre.
@@ -30,7 +30,7 @@ PREFIX = "lift-long-panel-no-sag__"
 RNG = np.random.default_rng(20)
 
 # -- the task file's layout (lift_long_panel_no_sag.py), metres -------------------------------------------------------
-PANEL_LENGTH, PANEL_WIDTH, PANEL_THICK, SEGMENTS = 0.60, 0.06, 0.006, 20
+PANEL_LENGTH, PANEL_WIDTH, PANEL_THICK, SEGMENTS = 0.60, 0.06, 0.0008, 20
 SEG = PANEL_LENGTH / SEGMENTS
 GAP = 0.0004
 BAR = (0.036, 0.64, 0.012)
@@ -260,7 +260,7 @@ def build_panel():
                     loop[uv].uv = (0.0, 0.0)
         ob = _new_object(f"seg_{i:02d}", bm, [top, edge], coll)
         lo, hi = _bounds(coll)
-        # each segment fills its box: 3 x 6 x 0.6 cm, within 0.01 mm
+        # each segment fills its box: 3 x 6 x 0.08 cm, within 0.01 mm
         over = max(hi.x - length / 2, hi.y - PANEL_WIDTH / 2, hi.z - PANEL_THICK / 2,
                    -lo.x - length / 2, -lo.y - PANEL_WIDTH / 2, -lo.z - PANEL_THICK / 2)
         if over > 1e-5:

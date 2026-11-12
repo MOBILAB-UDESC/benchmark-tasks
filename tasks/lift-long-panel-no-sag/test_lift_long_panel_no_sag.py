@@ -1,6 +1,6 @@
 """Offline checks (no GPU): the task file loads, the scorer covers each outcome and remembers the peak bow and the lift,
-a static model of the hinge chain gives the bows the text promises for the demo's hold and for the ends, and the demo
-reaches for both arms. Run in the yam_arena environment:  python -m pytest -q test_lift_long_panel_no_sag.py"""
+full credit needs the fingers off the panel, a static model of the hinge chain (uniform mass and the real panel's six
+lumps) gives the bows the text promises for the demo's hold and for the ends, and the demo reaches for both arms. Run in the yam_arena environment:  python -m pytest -q test_lift_long_panel_no_sag.py"""
 
 from __future__ import annotations
 
@@ -19,13 +19,14 @@ TASK = load(HERE / "lift_long_panel_no_sag.py")
 T = TASK.module
 N = T.SEGMENTS
 ELL = T.PANEL_LENGTH / N
+BARE_MASS = 0.0533  # kg: 0.6 x 0.06 x 0.0008 m of FR-4 at 1.85 g/cm3
 
 
-def _state(points, speed=0.0, spin=0.0):
+def _state(points, speed=0.0, spin=0.0, tilts=None):
     pts = np.asarray(points, float)
     return PanelState(pos=pts.mean(0), quat_xyzw=np.array([0.0, 0.0, 0.0, 1.0]), lin_vel=np.zeros(3), ang_vel=np.zeros(3),
                       low=pts.min(0), high=pts.max(0), points=pts, speeds=np.full(len(pts), speed),
-                      spins=np.full(len(pts), spin), tilts=np.zeros(len(pts)))
+                      spins=np.full(len(pts), spin), tilts=np.zeros(len(pts)) if tilts is None else tilts)
 
 
 def _flat(x, z, y0=0.0, bend=0.0):
@@ -60,6 +61,7 @@ def test_layout():
     panel = T.PANEL
     assert panel.seg_len == pytest.approx(0.03)
     assert panel.hinge_stiffness == pytest.approx(T.PANEL_EI / panel.seg_len)
+    assert T.PANEL_THICK == pytest.approx(0.0008)  # the collider is as thin as the 0.8 mm board it stands for
     assert T.START_Z - T.PANEL_THICK / 2 > T.START_TOP  # off the bench rail, not in it
     assert T.START_Z - T.PANEL_THICK / 2 - T.START_TOP < 0.001
     assert T.RACK_Z - T.PANEL_THICK / 2 == pytest.approx(T.RACK_TOP)
@@ -97,6 +99,8 @@ def test_the_rack_is_on_its_rail_within_tolerance():
     assert T.score(_scene(_flat(T.RACK_X + 0.019, T.RACK_Z))) == 1.0
     assert T.score(_scene(_flat(T.RACK_X + 0.025, T.RACK_Z))) == 0.5  # 2.5 cm off its line
     assert T.score(_scene(_flat(T.RACK_X, T.RACK_Z, y0=0.025))) == 0.5  # 2.5 cm along the rail
+    assert T.score(_scene(_flat(T.RACK_X, T.RACK_Z + 0.0009))) == 1.0  # lying on it, within 1 mm
+    assert T.score(_scene(_flat(T.RACK_X, T.RACK_Z + 0.0015))) == 0.5  # 1.5 mm above its rail: not resting on it
     assert T.score(_scene(_flat(T.RACK_X, T.RACK_Z + 0.006))) == 0.5  # 6 mm above its rail: caught, not resting on it
     assert T.score(_scene(_flat(T.RACK_X - 0.12, T.RACK_Z))) == 0.5  # on the table side of the rack
 
@@ -154,6 +158,75 @@ def test_reset_clears_the_memory():
     assert not T.STATE["lifted"]
 
 
+# -- the grippers must let go -------------------------------------------------------------------------------------------
+
+
+def _fingers_at(x, y, z):
+    """A small cloud of finger-mesh points around one place."""
+    return np.array([[x + dx, y + dy, z + dz] for dx in (-0.001, 0.001) for dy in (-0.004, 0.004) for dz in (-0.01, 0.0)])
+
+
+def test_a_panel_held_on_the_rack_is_not_a_full_score():
+    """The reviewers' exploit: the panel carried to the rack and held there, still, without letting go."""
+    T.score(_scene(HELD))
+    T.STATE["touched"] = True  # a finger is on it (what the step hook reads from the running simulation)
+    assert T.score(_scene(ON_RACK)) == 0.5
+    assert not T.success(_scene(ON_RACK))
+
+
+def test_a_panel_held_still_just_over_the_rack_is_not_a_full_score():
+    T.score(_scene(HELD))
+    T.STATE["touched"] = True
+    hovering = _flat(T.RACK_X, T.RACK_Z + 0.0005)  # even within 1 mm of lying on the rail
+    assert T.score(_scene(hovering)) == 0.5
+    assert not T.success(_scene(hovering))
+
+
+def test_letting_go_gives_the_full_score_back():
+    T.score(_scene(HELD))
+    T.STATE["touched"] = True
+    assert T.score(_scene(ON_RACK)) == 0.5
+    T.STATE["touched"] = False
+    assert T.score(_scene(ON_RACK)) == 1.0
+    assert T.success(_scene(ON_RACK))
+
+
+def test_a_held_panel_still_loses_to_the_bow_limit_first():
+    T.score(_scene(_flat(0.33, T.START_Z + 0.10, bend=0.005)))
+    T.STATE["touched"] = False
+    assert T.score(_scene(ON_RACK)) == 0.0
+
+
+def test_reset_lets_go():
+    T.STATE["touched"] = True
+    T.reset_memory()
+    assert not T.STATE["touched"]
+
+
+def test_fingers_on_the_panel_are_touching():
+    on_edge = _fingers_at(T.RACK_X + T.PANEL_WIDTH / 2 + 0.0005, 0.0, T.RACK_Z)  # a pad on the long edge
+    assert T.touching(_scene(ON_RACK), on_edge)
+    pad_under = _fingers_at(T.RACK_X + 0.025, 0.1, T.RACK_Z - 0.0015)  # a finger just under the panel
+    assert T.touching(_scene(ON_RACK), pad_under)
+    on_top = _fingers_at(T.RACK_X, -0.12, T.RACK_Z + T.PANEL_THICK / 2 + 0.002)
+    assert T.touching(_scene(ON_RACK), on_top)
+
+
+def test_open_fingers_beside_the_panel_are_not_touching():
+    # the demo opens the pads 9.4 cm apart: 1.7 cm clear of the 6 cm panel on each side
+    clear = np.vstack([_fingers_at(T.RACK_X + 0.047, 0.17, T.RACK_Z), _fingers_at(T.RACK_X - 0.047, 0.17, T.RACK_Z)])
+    assert not T.touching(_scene(ON_RACK), clear)
+    assert not T.touching(_scene(ON_RACK), _fingers_at(T.RACK_X, 0.17, T.RACK_Z + 0.02))  # 2 cm above it
+    assert not T.touching(_scene(ON_RACK), _fingers_at(T.RACK_X + 0.037, 0.0, T.RACK_Z))  # 6 mm off its edge
+
+
+def test_touching_follows_a_segments_pitch():
+    pts = _flat(T.RACK_X, T.RACK_Z + 0.1)
+    probe = (pts[10] + [0.0, 0.014, 0.004])[None, :]
+    assert not T.touching({"panel": _state(pts)}, probe)  # 3.6 mm over a flat segment's top
+    assert T.touching({"panel": _state(pts, tilts=np.full(N, 0.3))}, probe)  # inside the same segment tipped 0.3 rad
+
+
 def test_set_down_off_the_rack_after_a_clean_lift_is_half():
     T.score(_scene(HELD))
     assert T.score(_scene(_flat(T.START_X, T.START_Z))) == 0.5  # put back on the bench rail
@@ -162,12 +235,28 @@ def test_set_down_off_the_rack_after_a_clean_lift_is_half():
 # -- the design: a static model of the hinge chain ----------------------------------------------------------------
 
 
+def _lumpy(n=N, bare=BARE_MASS, total=T.PANEL_MASS):
+    """The real panel's mass along the chain: the bare strip's, spread evenly, plus six equal groups of parts at the
+    middles of its six 10 cm boards (5, 15 ... 55 cm from one end), each shared between the two segments it lies
+    between."""
+    ell = T.PANEL_LENGTH / n
+    m = np.full(n, bare / n)
+    for centre in (0.05, 0.15, 0.25, 0.35, 0.45, 0.55):
+        s = centre / ell - 0.5
+        i = int(np.floor(s))
+        m[i] += (total - bare) / 6 * (1 - (s - i))
+        m[i + 1] += (total - bare) / 6 * (s - i)
+    return m
+
+
 def _chain_bow(grip_y_from_end: float, clamped: bool, mass=T.PANEL_MASS, ei=T.PANEL_EI, n=N) -> float:
     """The bow (m) of a chain of n segments on torsion springs of EI / ell, lifted at two points that are
-    ``grip_y_from_end`` from each end (nearest segment centres). ``clamped`` holds the gripped segments level, as a
-    gripper that doesn't rotate does, otherwise they only hold their height."""
+    ``grip_y_from_end`` from each end (nearest segment centres). ``mass`` is the whole panel's (spread evenly) or an
+    array of each segment's. ``clamped`` holds the gripped segments level, as a gripper that doesn't rotate does,
+    otherwise they only hold their height."""
     ell = T.PANEL_LENGTH / n
-    k, m = ei / ell, mass / n
+    k = ei / ell
+    m = np.asarray(mass, float) if np.ndim(mass) else np.full(n, mass / n)
     a = min(int(grip_y_from_end / ell), n // 2 - 1)
     b = n - 1 - a
     nv = n + 1  # unknowns: each segment's angle, and the first one's height
@@ -182,7 +271,7 @@ def _chain_bow(grip_y_from_end: float, clamped: bool, mass=T.PANEL_MASS, ei=T.PA
         v = np.zeros(nv)
         v[j], v[j - 1] = 1.0, -1.0
         K += k * np.outer(v, v)
-    f = m * 9.81 * Z.sum(0)
+    f = 9.81 * (m[:, None] * Z).sum(0)
     rows, rhs = [Z[a] - Z[b], Z[a]], [0.0, 0.0]
     if clamped:
         for s in (a, b):
@@ -212,6 +301,38 @@ def test_lifting_by_the_ends_cracks_it_in_the_model():
 def test_lifting_at_the_middle_cracks_it_in_the_model():
     for clamped in (False, True):
         assert _chain_bow(0.30 - 0.06, clamped) > 0.004  # the two hands 12 cm apart in the middle
+
+
+def test_the_hold_zone_is_narrow_for_a_gripper_that_lets_the_panel_turn():
+    """The pads close on a 0.8 mm edge, so a held segment turns about x: one segment (3 cm) off the demo's hold the
+    pinned panel already bows past the 4 mm limit. This is why the runs with GRIP_Y 0.15 and 0.24 score 0."""
+    assert _chain_bow(0.13, False) < 0.003  # the demo's segment
+    assert _chain_bow(0.10, False) > 0.004  # one segment nearer the end
+    assert _chain_bow(0.16, False) > 0.004  # one segment nearer the middle (about GRIP_Y 0.15)
+    assert _chain_bow(0.07, False) > 0.004  # about GRIP_Y 0.24
+    assert _chain_bow(0.015, False) > 0.004  # GRIP_Y 0.285
+
+
+def test_the_real_panels_lumps_bow_like_the_uniform_model():
+    """The built panel carries its parts in six groups, the simulated one spreads its mass: the bows agree."""
+    assert _lumpy().sum() == pytest.approx(T.PANEL_MASS)
+    for grip in (0.015, 0.045, 0.13):
+        for clamped in (False, True):
+            uniform, lumps = _chain_bow(grip, clamped), _chain_bow(grip, clamped, mass=_lumpy())
+            assert lumps == pytest.approx(uniform, rel=0.1, abs=0.0003)
+
+
+def test_the_hold_still_works_across_the_stiffness_the_build_may_have():
+    """The cantilever test lets the built panel's EI be 10% off: the demo's hold stays flat and the ends still crack."""
+    for ei in (0.9 * T.PANEL_EI, 1.1 * T.PANEL_EI):
+        assert _chain_bow(0.13, True, ei=ei) < 0.003
+        assert _chain_bow(0.015, True, ei=ei) > 0.004
+        assert _chain_bow(0.015, False, ei=ei) > 0.004
+
+
+def test_a_bare_strip_would_not_sag_enough():
+    """Why the panel is populated to 120 g: the bare 53 g strip held level by its ends bows only about 3 mm."""
+    assert _chain_bow(0.015, True, mass=BARE_MASS) < 0.004
 
 
 # -- the demo -------------------------------------------------------------------------------------------------------

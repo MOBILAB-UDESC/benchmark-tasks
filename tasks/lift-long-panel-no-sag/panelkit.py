@@ -5,7 +5,7 @@ A task file uses it like this (keep this file next to the task file):
     import panelkit
     from panelkit import Panel, dress, on_reset
 
-    PANEL = Panel("panel", pos=(0.26, 0.0, 0.78), length=0.60, width=0.06, thickness=0.006, panel_mass=0.12,
+    PANEL = Panel("panel", pos=(0.26, 0.0, 0.78), length=0.60, width=0.06, thickness=0.0008, panel_mass=0.12,
                   bending_stiffness=0.07)
     OBJECTS = [PANEL, ...]
 
@@ -16,9 +16,9 @@ sideways bend and no twist.
 
 It plugs into yam_arena without modifying it: importing this module hooks ``yam_arena.scene`` so a ``Panel`` in
 ``OBJECTS`` is spawned as a PhysX articulation and ``success()/score()/distance()`` receive a :class:`PanelState`
-(an ``ObjectState`` with every segment's centre, velocity and tilt). It also hooks the embodiment's reset, so a task
-file can clear what it remembers (:func:`on_reset`), and the spawner of fixed boxes, so a box can be drawn by a mesh
-in ``looks/`` instead (:func:`dress`, :func:`panel_look`). Pure Python at import time: everything that needs Isaac
+(an ``ObjectState`` with every segment's centre, velocity and tilt). It also hooks the embodiment's reset and control step, so a task
+file can clear what it remembers (:func:`on_reset`) and read the scene every step (:func:`on_step`), and the spawner
+of fixed boxes, so a box can be drawn by a mesh in ``looks/`` instead (:func:`dress`, :func:`panel_look`). Pure Python at import time: everything that needs Isaac
 Sim is imported lazily.
 """
 
@@ -34,7 +34,7 @@ from pathlib import Path
 import numpy as np
 from yam_arena.task_file import Box, ObjectState
 
-__all__ = ["Panel", "PanelState", "bow", "dress", "install", "on_reset", "panel", "panel_look"]
+__all__ = ["Panel", "PanelState", "bow", "dress", "install", "on_reset", "on_step", "panel", "panel_look"]
 
 FOLDER = Path(__file__).resolve().parent / "looks"
 
@@ -47,7 +47,7 @@ class Panel(Box):
 
     length: float = 0.6
     width: float = 0.06
-    thickness: float = 0.006
+    thickness: float = 0.0008
     segments: int = 20
     panel_mass: float = 0.12  # kg, the whole panel
     bending_stiffness: float = 0.07  # EI in N m^2
@@ -87,7 +87,7 @@ def panel(name: str, centre: tuple[float, float, float], **kwargs) -> Panel:
     """A :class:`Panel` of the given centre and dimensions, with its bounding box filled in."""
     length = kwargs.get("length", 0.6)
     width = kwargs.get("width", 0.06)
-    thickness = kwargs.get("thickness", 0.006)
+    thickness = kwargs.get("thickness", 0.0008)
     return Panel(name=name, pos=tuple(centre), size=(width, length, thickness), **kwargs)
 
 
@@ -352,11 +352,18 @@ def _panel_state(env, spec: Panel) -> PanelState:
 # -- hooking yam_arena -----------------------------------------------------------------------------------------------
 
 _RESET: list = []
+_STEP: list = []
 
 
 def on_reset(fn):
     """Register ``fn(env)`` to run after every reset of the embodiment, once the scene stands at its start."""
     _RESET.append(fn)
+    return fn
+
+
+def on_step(fn):
+    """Register ``fn(env)`` to run after every control step, before the task file's hooks score it."""
+    _STEP.append(fn)
     return fn
 
 
@@ -389,7 +396,7 @@ def _patch_embodiment(module) -> None:
     cls = module.YamArenaEmbodiment
     if getattr(cls, "_panelkit", False):
         return
-    base_reset = cls.reset
+    base_reset, base_task_step = cls.reset, cls._task_step
 
     def reset(self, *args, **kwargs):
         out = base_reset(self, *args, **kwargs)
@@ -397,7 +404,12 @@ def _patch_embodiment(module) -> None:
             fn(self._env)
         return out
 
-    cls.reset = reset
+    def _task_step(self, *args, **kwargs):
+        for fn in _STEP:
+            fn(self._env)
+        return base_task_step(self, *args, **kwargs)
+
+    cls.reset, cls._task_step = reset, _task_step
     cls._panelkit = True
 
 
