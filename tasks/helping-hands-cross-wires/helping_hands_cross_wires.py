@@ -291,9 +291,10 @@ def wire_gap(objects) -> float:
 
 
 def wires_touch(objects) -> bool:
-    """The wires touch: the simulator reports a contact point between them at 0.5 mm or less (read every physics
-    substep by ``contact.py``), and their faces are at most 0.5 mm apart by their heights."""
-    return bool(STATE["touch"] and wire_gap(objects) <= TOUCH_GAP)
+    """The wires touch: the simulator reports a contact point between them at 1 mm or less (read every physics
+    substep by ``contact.py``), and their faces are within 1 mm of each other by their heights (a gap, or the wires
+    pressed into each other, of 1 mm at most)."""
+    return bool(STATE["touch"] and abs(wire_gap(objects)) <= TOUCH_GAP)
 
 
 def crossed(objects) -> bool:

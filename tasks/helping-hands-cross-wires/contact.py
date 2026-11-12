@@ -22,7 +22,7 @@ from bonds import on_reset, on_spawn
 
 __all__ = ["TOUCH_SEP", "min_separation", "reset", "status", "touching"]
 
-TOUCH_SEP = 0.0005  # m: a contact point this close or closer (or penetrating) is touching
+TOUCH_SEP = 0.001  # m: a contact point this close or closer (or penetrating) is touching
 SENSOR, OTHER = "right_wire", "left_wire"  # the contact view's sensor body and its filter body
 
 # What the view last saw: the smallest separation over the contact points of the latest physics substep (inf: no

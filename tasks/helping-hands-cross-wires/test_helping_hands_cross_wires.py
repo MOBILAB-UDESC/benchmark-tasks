@@ -160,11 +160,12 @@ def test_full_score_needs_the_wires_touching():
     assert T.score(held(s, touch=True)) == 0.5
 
 
-def test_touch_gap_half_a_millimetre():
-    assert T.wires_touch(held(with_height(final(), "left_wire", 0.0004)))
-    assert not T.wires_touch(held(with_height(final(), "left_wire", 0.0006)))
-    assert T.wires_touch(held(with_height(final(), "left_wire", -0.0004)))  # pressed into each other: touching
-    assert T.wires_touch(held(with_height(final(), "right_wire", -0.0004)))
+def test_touch_gap_one_millimetre():
+    assert T.wires_touch(held(with_height(final(), "left_wire", 0.0009)))
+    assert not T.wires_touch(held(with_height(final(), "left_wire", 0.0011)))
+    assert T.wires_touch(held(with_height(final(), "left_wire", -0.0009)))  # pressed 0.9 mm into each other: touching
+    assert T.wires_touch(held(with_height(final(), "right_wire", -0.0009)))
+    assert not T.wires_touch(held(with_height(final(), "left_wire", -0.0011)))  # 1.1 mm into each other
     assert not T.wires_touch(held(with_height(final(), "right_wire", -0.003)))
     assert not T.wires_touch(held(with_height(final(), "right_wire", 0.003)))
 
@@ -387,7 +388,7 @@ def test_touching_follows_the_closest_point():
 
     contact._MON["sep"] = float("inf")
     assert not contact.touching()
-    contact._MON["sep"] = 0.0004
+    contact._MON["sep"] = 0.0009
     assert contact.touching()
     contact._MON["sep"] = 0.003  # a point inside the 5 mm contact offset, still 3 mm apart
     assert not contact.touching()
