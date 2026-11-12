@@ -19,5 +19,5 @@
   "reset_notes": "Stand the clamp back on its foot at its start, open its sliding jaw back to 6 cm (press the ratchet's release), and re-stack the boards on the spacers with their edges aligned.",
   "fidelity": "Rigid bodies, 240 Hz physics, 20 Hz control. Boards and spacers are boxes, the clamp is one rigid body of four boxes, the sliding jaw a box on a prismatic joint, the fixed jaw's pad a box on a spring. Simplified: the bar's flex and the pads' rubber are one spring of 40 N per mm, and the trigger is not modelled: while a finger presses the jaw on the stack the ratchet drives it on (up to 100 N). Meshes drawn only.",
   "scores": "Dream-1: 0.0 (ran to the step limit without finishing). Demo: 1.0 (success at step 327, clamping force 71 N). The same demo with the trigger released after 1 s scores 0.25.",
-  "media": "M-6SPF25"
+  "media": "M-PGCBW5"
 }
