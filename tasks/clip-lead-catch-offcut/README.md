@@ -81,7 +81,9 @@ inspect-robots run --embodiment yam_arena --policy yam_scripted \
   degrees (the jaws' direction) and the right aim is trimmed 3.5 mm (`TRIM`, tuned from traces). The demo reads only
   the fixed layout. The demo ends on success at step 378 (18.9 s at 20 Hz), the offcut at rest in the cup and let go for the 1 s hold. A trial takes about 4 minutes on an L40S shared with other jobs, including startup.
 - The one-handed shortcut: the same demo with the left arm staying back (`HOLD_OFFCUT = False`) clips the lead and
-  the offcut leaves the 10 cm and the trial scores 0 (run to the end, 0.0).
+  nothing holds the offcut when the snap sends it past 10 cm, so it is in free flight and the trial scores 0. The
+  simulator run of this shortcut was made before the flight rule was reworked (0.0) and not repeated since. The unit
+  tests cover it on the current rule.
 - A high cut: the same demo with the nippers held 6 mm up (`CUT_HIGH = 0.006`) clips the lead at its 4 mm break point, with the offcut still caught and dropped in the cup, and scores 0.25.
 - Videos: `inspect-robots video ~/yam-eval/clip-lead-catch-offcut-demo/<log>.json` writes one MP4 per camera next to
   the frames.
