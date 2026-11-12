@@ -17,6 +17,6 @@
   "run_limit": "2,400 steps (2 minutes at 20 Hz)",
   "reset_notes": "Slide the battery back onto the handle's foot until it clicks, lay the drill back in its place and empty the tray.",
   "fidelity": "Rigid bodies, 240 Hz physics, 20 Hz control. The drill is NVIDIA's SimReady model, one rigid body colliding as its mesh, its moulded-on pack removed. The pack and the tray collide as boxes (the meshes are drawn only). The pack slides on a joint with a 10 N friction drive and a lock switched by a step hook, the buttons are sprung joints. Gripper 50 N per pad. Let go is read from points on the finger collision meshes. Masses are typical values.",
-  "scores": "Dream-1 was not run on this version. Demo: 1.0 (success at step 258)",
+  "scores": "Dream-1: 0.0 (ran to the step limit without finishing). Demo: 1.0 (success at step 258)",
   "media": "M-EL7SUJ"
 }

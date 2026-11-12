@@ -48,7 +48,7 @@ On the YAM Brev launchable, from this folder, with the Arena environment active
 (`source /data/IsaacLab-Arena/yam.env`):
 
 ```bash
-# Dream-1 (needs DREAM_API_KEY), 2,400 steps. Not run on this version of the scorer
+# Dream-1 (needs DREAM_API_KEY), 2,400 steps
 inspect-robots run --embodiment yam_arena --policy dream \
   -E task=drill_battery_release.py -E object_jitter=0 -E control_hz=20 -E cam_width=320 -E cam_height=176 \
   --instruction "Hold the drill with the right hand. With the left hand, squeeze both release buttons on the orange battery, slide the battery off the drill's handle and put it in the blue tray." \
