@@ -73,6 +73,8 @@ LOOKS = {"cutter_front": "cutter_body.usdc", "lid": "cutter_lid.usdc"}
 dress(LOOKS, hide=[name for name, _, _ in C.body_boxes() if name != "cutter_front"])
 
 # -- the struts ---------------------------------------------------------------------------------------------------------
+# The simulation applies their torque about the hinge (below). ``struts.py`` is the real pair of gas struts and lobes
+# that give the same torque (README, "The struts"), with its dimensions, and the tests check that they match.
 STRUT_FROM = 30.0  # degrees: below this the struts give nothing (their line passes close to the hinge)
 STRUT_FULL = 38.0  # degrees: their full lift from here up
 STRUT_GAIN = 1.2  # their full torque is this times the lid's weight torque at 30 degrees
@@ -203,7 +205,7 @@ def success(objects) -> bool:
 
 
 def score(objects) -> float:
-    """1.0: open 75 degrees or more and still. 0.5: open 36 degrees or more. 0.25: open 10 degrees or more. 0 if the
+    """1.0: open 75 degrees or more and still. 0.5: open 37 degrees or more. 0.25: open 10 degrees or more. 0 if the
     lid ever fell 20 degrees below the highest it reached, or hit its closed stop faster than 60 degrees per second.
     Angles are the lid's at the end of the trial."""
     if _failed(objects):

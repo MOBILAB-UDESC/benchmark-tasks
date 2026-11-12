@@ -98,6 +98,78 @@ def test_lid_mass_and_weight():
     assert T.weight_torque(0.0) == pytest.approx(T.LID_MASS * 9.81 * 0.2157, rel=0.02)
 
 
+# -- the struts: the real mechanism that gives the simulation's torque (README, "The struts") ---------------------------
+
+import struts as S  # noqa: E402
+
+ROWS = S.profile(T.strut_torque)
+
+
+def test_strut_pair_reproduces_the_simulated_torque():
+    """The lobe profile solved from the simulation's torque, read back through the struts' force curve, gives the same
+    torque from shut to the stop (a few tenths of a degree either side of the 30 degree corner are excepted)."""
+    for deg in range(0, 81, 2):
+        if abs(deg - 30) <= 0.5:
+            continue
+        assert S.torque_from_profile(ROWS, deg) == pytest.approx(T.strut_torque(deg), abs=0.15), deg
+
+
+def test_strut_pair_gives_nothing_below_30_degrees_and_holds_the_stop():
+    assert all(r[4] == 0.0 and r[1] == S.DWELL_RADIUS for r in ROWS if r[0] <= S.DWELL_END)
+    assert S.torque_from_profile(ROWS, 80.0) == pytest.approx(T.strut_torque(80.0), abs=0.1)
+    assert T.strut_torque(80.0) > T.weight_torque(80.0) * 2
+
+
+def test_strut_pair_fits_its_stroke_and_the_back_block():
+    ext = [r[2] for r in ROWS]
+    assert min(ext) >= 0.0 and max(ext) <= S.STROKE - 0.010  # 10 mm of rod to spare at the stop
+    assert all(r[1] - S.ROLLER_RADIUS > 0.03 for r in ROWS)  # the lobe keeps a core round the hinge pin
+    assert max(S.pressure_angle(ROWS, d) for d in range(0, 81)) < 25.0  # the roller does not scrub the lobe
+    behind, above = S.lobe_extent(ROWS)
+    assert C.HINGE_U + behind < C.D - 0.005 and above < 0.01  # inside the back block's depth, not above the lid
+    pu, pw = S.body_pivot_point(C.HINGE_U, C.HINGE_W)
+    assert C.HINGE_U < pu < C.D - 0.01 and pw > 0.03  # the body end is inside the back block, off the table
+
+
+def test_strut_force_curve_is_a_real_gas_spring():
+    assert S.force(S.STROKE) == pytest.approx(S.FORCE_EXTENDED)
+    assert S.force(0.0) == pytest.approx(S.FORCE_EXTENDED * S.PROGRESSION)
+    assert S.force(0.01) > S.force(0.02) > S.force(0.03)  # it falls as the rod goes out
+
+
+def test_strut_damping_at_the_rod_is_what_the_hinge_damping_needs():
+    c = S.damping_at_roller(60.0, ROWS, T.STRUT_DAMPING * T.LID_MASS)
+    assert 3000.0 < c < 8000.0, c  # N s/m at each rod, about 5 kN s/m
+
+
+def _opening_time(start_deg, strut_damping=None, inertia=0.364, dt=1e-4):
+    """The lid let go from rest at ``start_deg`` with the simulation's weight, strut torque and damping, until it
+    reaches the open stop: (seconds, arrival speed in rad/s)."""
+    sd = T.STRUT_DAMPING * T.LID_MASS if strut_damping is None else strut_damping
+    hd = T.HINGE_DAMPING * T.LID_MASS
+    th, w, t = math.radians(start_deg), 0.0, 0.0
+    while th < math.radians(C.OPEN_DEG) and t < 10.0:
+        deg = math.degrees(th)
+        torque = T.strut_torque(deg) - T.weight_torque(deg) - hd * w - (sd * w if deg > T.STRUT_FROM else 0.0)
+        w += torque / inertia * dt
+        th += w * dt
+        t += dt
+        if th <= 0.0:
+            return float("inf"), 0.0
+    return t, w
+
+
+def test_lid_lets_go_at_40_degrees_reaches_the_stop_in_under_a_second_and_slowly():
+    t, w = _opening_time(40.0)
+    assert 0.7 < t < 1.0 and w < 1.8  # about 0.86 s, arriving at about 1.5 rad/s (85 degrees per second)
+    t0, w0 = _opening_time(40.0, strut_damping=0.0)  # without the damping it would hit the stop 3 times faster
+    assert t0 < 0.4 and w0 > 4.0
+
+
+def test_lid_let_go_below_the_balance_angle_falls_back():
+    assert _opening_time(T.balance_deg() - 2.0)[0] == float("inf")
+
+
 # -- scoring ---------------------------------------------------------------------------------------------------------
 
 
