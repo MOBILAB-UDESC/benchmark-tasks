@@ -1,7 +1,8 @@
-"""Offline checks (no GPU): the task file loads, the layout leaves the board room to slide, the scorer covers each
-outcome, the 2 s contact timer and the episode's memory work, pulling the board first or touching a pad with a finger
-scores 0, and the demo discharges before it pulls and stays within reach. Run in the yam_arena environment:
-python -m pytest -q test_discharge_psu_capacitor.py"""
+"""Offline checks (no GPU): the task file loads, the layout leaves the board room to slide, the electrical model's
+numbers hold, the scorer covers each outcome, real contact (a pin's tip on a pad, a finger on the board) is what counts,
+the contact time and the episode's memory work, pulling the board first or touching it with a finger scores 0, a board
+held still in the box does not score 1.0, and the demo discharges before it pulls and stays within reach. Run in the
+yam_arena environment: python -m pytest -q test_discharge_psu_capacitor.py"""
 
 from __future__ import annotations
 
@@ -18,7 +19,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 TASK = load(HERE / "discharge_psu_capacitor.py")
 T = TASK.module
 DT = 0.05  # s: one control step at 20 Hz
-STEPS_2S = round(T.DISCHARGE_S / DT)
+STEPS_FULL = round(T.DISCHARGE_S / DT)  # 330 steps: five time constants
 
 FLAT = np.array([0.0, 0.0, 0.0, 1.0])
 DOWN = np.array([0.0, -math.sin(math.pi / 4), 0.0, math.cos(math.pi / 4)])  # a quarter turn about y: +x up, pins down
@@ -32,25 +33,26 @@ def _state(pos, quat=FLAT, vel=(0.0, 0.0, 0.0)):
 
 BOARD0 = np.asarray(T.BOARD.pos)
 CAP0 = np.asarray(T.CAPACITOR.pos)
+SINK0 = np.asarray(T.HEATSINK.pos)
 TOOL0 = np.asarray(T.TOOL.pos)
 
 
-def _scene(board=None, tool=None, capacitor=None):
-    out = {"board": _state(BOARD0), "capacitor": _state(CAP0), "tool": _state(TOOL0)}
-    for name, value in (("board", board), ("tool", tool), ("capacitor", capacitor)):
+def _scene(board=None, tool=None, capacitor=None, heatsink=None):
+    out = {"board": _state(BOARD0), "capacitor": _state(CAP0), "heatsink": _state(SINK0), "tool": _state(TOOL0)}
+    for name, value in (("board", board), ("tool", tool), ("capacitor", capacitor), ("heatsink", heatsink)):
         if value is not None:
             out[name] = value if isinstance(value, ObjectState) else _state(value)
     return out
 
 
-def _tool_on_pads(offset=(0.0, 0.0, 0.0), cap=CAP0):
-    """The tool hanging pins down, its pins' tips on the pads (shifted by ``offset``)."""
-    pads_mid = np.asarray(cap) + (0.0, 0.0, T.CAP_SIZE[2] / 2)
+def _tool_on_pads(offset=(0.0, 0.0, 0.0), board=BOARD0):
+    """The tool hanging pins down, its pins' tips on the pads (shifted by ``offset``), the board at ``board``."""
+    pads_mid = np.asarray(board) + (T.PADS_XY[0] - T.BOARD_XY[0], T.PADS_XY[1] - T.BOARD_XY[1], T.BOARD_SIZE[2] / 2)
     centre = pads_mid + (0.0, 0.0, T.TOOL_SIZE[0] / 2) + np.asarray(offset)
     return _state(centre, DOWN)
 
 
-def _discharge(steps=STEPS_2S, offset=(0.0, 0.0, 0.0), fingers=None):
+def _discharge(steps=STEPS_FULL, offset=(0.0, 0.0, 0.0), fingers=None):
     for _ in range(steps):
         T.observe(_scene(tool=_tool_on_pads(offset)), fingers, DT)
 
@@ -61,6 +63,18 @@ def _board_at(dx=0.0, dy=0.0, dz=0.0, vel=(0.0, 0.0, 0.0)):
 
 IN_BOX = (*T.BOX_XY, T.BOX_FLOOR_TOP + T.BOARD_SIZE[2] / 2)
 PULLED = BOARD0 + (-0.12, 0.0, 0.0)  # off the rails, 1.6 cm above the table in front of the case
+
+
+def _fingers_on(name, gap=0.0):
+    """Two finger points ``gap`` above the top of a part (the board's drawn parts reach 1.8 cm above it), and one far off."""
+    top = {"board": T.BOARD_TOP + T.PARTS_H, "capacitor": T.CAP_TOP, "heatsink": T.CAP_TOP}[name]
+    xy = {"board": (T.BOARD_XY[0] - 0.045, T.BOARD_XY[1] + 0.05), "capacitor": T.CAP_XY, "heatsink": T.SINK_XY}[name]
+    return np.array([[*xy, top + gap], [0.0, 0.0, T.TOP + 0.5]])
+
+
+def _quat_about_y(deg):
+    h = math.radians(deg) / 2
+    return np.array([0.0, math.sin(h), 0.0, math.cos(h)])
 
 
 @pytest.fixture(autouse=True)
@@ -106,12 +120,40 @@ def test_arms_work_in_their_own_halves():
     assert tool_far < T.CASE_Y - T.CASE_SIZE[1] / 2 - 0.1
 
 
+def test_pads_are_test_points_on_the_board_between_the_parts():
+    """The terminals are two flush test pads on the board's top face, between the capacitor and the heatsink and 1 cm or
+    more clear of each, round the tool's 1.5 cm end, so the tool rests on the board and not on a part."""
+    p = T.pads(_scene())
+    assert np.allclose(p[:, 2], T.BOARD_TOP) and np.allclose(p[:, 0], T.PADS_XY[0])
+    assert p[1, 1] - p[0, 1] == pytest.approx(T.PAD_GAP) and T.PAD_D == 0.008
+    half = T.TOOL_SIZE[1] / 2
+    lo, hi = T.PADS_XY[1] - half, T.PADS_XY[1] + half  # the tool's end face along y
+    assert lo - (T.CAP_XY[1] + T.CAP_SIZE[1] / 2) >= 0.01
+    assert (T.SINK_XY[1] - T.SINK_SIZE[1] / 2) - hi >= 0.01
+    assert abs(T.PADS_XY[0] - T.BOARD_XY[0]) + half < T.BOARD_SIZE[0] / 2  # on the board
+
+
 def test_pins_and_pads_line_up():
-    assert np.allclose(T.pads(_scene()), [[*T.CAP_XY, T.CAP_TOP - 0.0] for _ in range(2)], atol=0.006)
     tips = T.pin_tips(_scene(tool=_tool_on_pads()))
     assert np.allclose(tips, T.pads(_scene()), atol=1e-9)  # turned pins down, both tips on both pads
     flat = T.pin_tips(_scene())
     assert np.allclose(flat[:, 0], T.TOOL_XY[0] - T.TOOL_SIZE[0] / 2)  # lying, the pins point toward the robot
+
+
+# -- the electrical model --------------------------------------------------------------------------------------------
+
+
+def test_electrical_model():
+    assert T.CAP_F == pytest.approx(330e-6) and T.V_START == 400.0 and T.TOOL_OHM == 10e3
+    assert T.TAU_S == pytest.approx(3.3)
+    assert T.DISCHARGE_S == pytest.approx(16.5) and T.DISCHARGE_S == pytest.approx(5 * T.TAU_S)
+    assert T.pad_voltage(0.0) == 400.0
+    assert T.pad_voltage(T.DISCHARGE_S) == pytest.approx(2.695, abs=0.005)  # 400 V * e^-5
+    assert T.pad_voltage(T.DISCHARGE_S) < T.V_SAFE
+    assert T.pad_voltage(2.0) > 200  # the old 2 s hold left more than half the charge
+    assert T.pad_voltage(4.4 * T.TAU_S) < T.V_SAFE < T.pad_voltage(4.3 * T.TAU_S)  # 5 V is reached at 4.38 time constants
+    assert T.V_START ** 2 / T.TOOL_OHM <= 25.0  # peak power inside the tool resistor's rating
+    assert 0.5 * T.CAP_F * T.V_START ** 2 == pytest.approx(26.4, abs=0.1)  # joules into the resistor
 
 
 # -- scoring ---------------------------------------------------------------------------------------------------------
@@ -122,21 +164,25 @@ def test_start_scores_zero():
     assert T.score(_scene()) == 0.0 and not T.success(_scene())
 
 
-def test_contact_for_two_seconds_discharges():
-    _discharge(STEPS_2S - 1)
+def test_five_time_constants_discharge():
+    _discharge(STEPS_FULL - 1)
     assert not T.STATE["discharged"] and T.score(_scene()) == 0.0
     _discharge(1)
     assert T.STATE["discharged"]
     assert T.score(_scene()) == 0.25  # discharged, the board still in the case
 
 
-def test_contact_must_be_continuous():
-    _discharge(STEPS_2S - 2)
-    T.observe(_scene(), None, DT)  # one step off the pads: the timer starts again
-    assert T.STATE["contact_s"] == 0.0
-    _discharge(STEPS_2S - 1)
-    assert not T.STATE["discharged"]
-    _discharge(1)
+def test_the_old_two_second_hold_is_not_enough():
+    _discharge(round(2.0 / DT))
+    assert not T.STATE["discharged"] and T.score(_scene(board=IN_BOX)) == 0.0
+
+
+def test_contact_time_adds_up_over_breaks():
+    """The capacitor keeps its charge while the pins are off, so the time counts in all, not in one go."""
+    _discharge(STEPS_FULL // 2)
+    T.observe(_scene(), None, DT)  # the pins off the pads for a step
+    assert T.STATE["contact_s"] == pytest.approx(STEPS_FULL // 2 * DT)
+    _discharge(STEPS_FULL - STEPS_FULL // 2)
     assert T.STATE["discharged"]
 
 
@@ -146,16 +192,24 @@ def test_discharge_is_remembered():
     assert T.STATE["discharged"] and T.score(_scene()) == 0.25
 
 
-@pytest.mark.parametrize("offset", [(0.003, 0.0, 0.0), (0.0, 0.003, 0.0), (0.0, 0.0, 0.003), (0.002, 0.002, 0.002)])
-def test_within_4_mm_touches(offset):
+@pytest.mark.parametrize("offset", [(0.0, 0.0, 0.0), (0.0029, 0.0, 0.0), (0.0, -0.0029, 0.0), (0.002, 0.002, 0.0),
+                                    (0.0, 0.0, 0.0014), (0.0, 0.0, -0.0014), (0.002, 0.0, 0.0014)])
+def test_a_tip_on_the_pad_touches(offset):
     _discharge(offset=offset)
     assert T.STATE["discharged"]
 
 
-@pytest.mark.parametrize("offset", [(0.0045, 0.0, 0.0), (0.0, 0.0, 0.005), (0.0, 0.01, 0.0)])
-def test_beyond_4_mm_does_not(offset):
+@pytest.mark.parametrize("offset", [(0.0031, 0.0, 0.0), (0.0, 0.0031, 0.0), (0.0, 0.0, 0.0016), (0.0, 0.0, -0.0016),
+                                    (0.0, 0.0, 0.004), (0.003, 0.003, 0.0), (0.004, 0.0, 0.0), (0.0, 0.01, 0.0)])
+def test_a_tip_off_the_pad_or_above_it_does_not(offset):
+    """Within 4 mm of the pad's centre used to count: now the tip must lie on the pad and touch its plane."""
     _discharge(offset=offset)
-    assert not T.STATE["discharged"]
+    assert not T.STATE["discharged"] and T.STATE["contact_s"] == 0.0
+
+
+def test_pins_hovering_above_the_board_do_not_touch():
+    _discharge(offset=(0.0, 0.0, 0.003))  # 3 mm up, the tool held above the pads with its tips over them
+    assert T.STATE["contact_s"] == 0.0 and not T.STATE["discharged"]
 
 
 def test_tool_either_way_round():
@@ -166,23 +220,25 @@ def test_tool_either_way_round():
     x2, y2, z2, w2 = q
     swapped = np.array([w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2, w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
                         w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2, w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2])
-    for _ in range(STEPS_2S):
+    for _ in range(STEPS_FULL):
         T.observe(_scene(tool=_state(turned.pos, swapped)), None, DT)
     assert T.STATE["discharged"]
 
 
 def test_one_pin_is_not_enough():
     one = _tool_on_pads((0.0, T.PAD_GAP / 2, 0.0))  # both pins shifted half a gap: one between the pads, one off
-    for _ in range(STEPS_2S + 5):
+    for _ in range(STEPS_FULL + 5):
         T.observe(_scene(tool=one), None, DT)
     assert not T.STATE["discharged"]
 
 
-def test_pads_follow_the_capacitor():
-    moved = CAP0 + (-0.03, 0.0, 0.0)
-    for _ in range(STEPS_2S):
-        T.observe(_scene(capacitor=moved, tool=_tool_on_pads(cap=moved)), None, DT)
-    assert T.STATE["discharged"]
+def test_pads_follow_the_board():
+    """The pads sit on the board, not the capacitor: moved with the board (after the discharge starts the board must not
+    move 2 cm, so test the geometry directly)."""
+    moved = BOARD0 + (-0.015, 0.0, 0.0)
+    scene = _scene(board=moved, tool=_tool_on_pads(board=moved))
+    assert T.pins_on_pads(scene)
+    assert not T.pins_on_pads(_scene(board=moved, tool=_tool_on_pads()))
 
 
 def test_pulled_out_after_discharge_half():
@@ -197,9 +253,10 @@ def test_partly_out_is_still_in_the_case():
     assert T.score(_scene(board=BOARD0 + (-0.06, 0.0, 0.0))) == 0.25  # on its rails still
 
 
-def test_in_box_succeeds():
+def test_released_still_in_the_box_succeeds():
     _discharge()
     objects = _scene(board=IN_BOX)
+    T.observe(objects, np.array([[0.3, 0.3, T.TOP + 0.3]]), DT)  # the fingers well away
     assert T.success(objects) and T.score(objects) == 1.0
 
 
@@ -209,10 +266,31 @@ def test_in_box_still_moving_half():
     assert not T.success(objects) and T.score(objects) == 0.5
 
 
-def test_held_above_the_box_half():
+def test_held_still_in_the_box_air_is_not_full():
+    """The named exploit: the board held motionless over the box (inside its walls, below their top), never put down."""
     _discharge()
-    high = (*T.BOX_XY, T.TOP + T.BOX_OUTER[2] + 0.03)
-    assert T.score(_scene(board=high)) == 0.5
+    for height in (0.02, 0.05, 0.08):
+        held = _scene(board=(*T.BOX_XY, T.BOX_FLOOR_TOP + T.BOARD_SIZE[2] / 2 + height))
+        assert not T.success(held) and T.score(held) == 0.5, height
+
+
+def test_held_in_fingers_on_the_floor_is_not_full():
+    """Set down on the floor but still gripped (a finger on the heatsink): not released."""
+    _discharge()
+    objects = _scene(board=IN_BOX)
+    T.observe(objects, _fingers_on("heatsink"), DT)
+    assert T.STATE["held"]
+    assert not T.success(objects) and T.score(objects) == 0.5
+    T.observe(objects, np.array([[0.3, 0.3, T.TOP + 0.3]]), DT)  # let go
+    assert T.success(objects) and T.score(objects) == 1.0
+
+
+def test_leaning_in_the_box_is_not_full():
+    _discharge()
+    tilted = _state((*T.BOX_XY, T.BOX_FLOOR_TOP + 0.03), _quat_about_y(25.0))
+    assert T.score(_scene(board=tilted)) == 0.5
+    level = _state((*T.BOX_XY, T.BOX_FLOOR_TOP + T.BOARD_SIZE[2] / 2 + 0.001), _quat_about_y(8.0))
+    assert T.score(_scene(board=level)) == 1.0
 
 
 def test_on_the_box_edge_is_not_in():
@@ -247,25 +325,38 @@ def test_small_shift_before_discharge_is_allowed():
     assert T.STATE["discharged"]
 
 
-def test_finger_on_a_pad_scores_zero():
-    pad = T.pads(_scene())[0]
-    fingers = np.array([pad + (0.0, 0.0, 0.0035), pad + (0.0, 0.05, 0.05)])
-    T.observe(_scene(), fingers, DT)
+@pytest.mark.parametrize("name", ["board", "capacitor", "heatsink"])
+def test_finger_on_an_exposed_part_before_the_discharge_scores_zero(name):
+    """A finger touching the board's copper (or its drawn parts), the capacitor or the heatsink, before the discharge."""
+    T.observe(_scene(), _fingers_on(name, 0.0), DT)
     assert T.STATE["failed"]
     _discharge()
-    assert T.score(_scene(board=IN_BOX)) == 0.0
+    assert T.score(_scene(board=IN_BOX)) == 0.0 and not T.STATE["discharged"]
 
 
-def test_finger_near_but_not_on_a_pad():
-    pad = T.pads(_scene())[1]
-    _discharge(fingers=np.array([pad + (0.0, 0.0, 0.0045)]))
+@pytest.mark.parametrize("name", ["board", "capacitor", "heatsink"])
+def test_finger_clear_of_the_part_is_fine(name):
+    _discharge(fingers=_fingers_on(name, 0.004))  # 4 mm clear, all along
     assert not T.STATE["failed"] and T.STATE["discharged"]
+
+
+def test_finger_on_a_test_pad_scores_zero():
+    pad = T.pads(_scene())[0]
+    T.observe(_scene(), np.array([pad + (0.0, 0.0, 0.0015), pad + (0.0, 0.05, 0.05)]), DT)
+    assert T.STATE["failed"]
+
+
+def test_finger_inside_the_drawn_parts_scores_zero():
+    """The transformer and the other drawn parts have no collider: a finger in their volume counts as touching them."""
+    inside = np.array([[T.BOARD_XY[0] - 0.03, T.BOARD_XY[1] - 0.035, T.BOARD_TOP + 0.010]])
+    T.observe(_scene(), inside, DT)
+    assert T.STATE["failed"]
 
 
 def test_finger_after_discharge_is_fine():
     _discharge()
-    T.observe(_scene(), np.array([T.pads(_scene())[0]]), DT)
-    assert not T.STATE["failed"]
+    T.observe(_scene(), _fingers_on("board"), DT)
+    assert not T.STATE["failed"] and T.STATE["held"]
 
 
 def test_board_on_the_floor_zero():
@@ -295,7 +386,7 @@ def test_demo_discharges_before_the_left_arm_comes():
     on, _ = _at(plan["right"], "pins on the pads")
     held, hold = _at(plan["right"], "hold")
     lifted, _ = _at(plan["right"], "lift off")
-    assert held - on >= T.DISCHARGE_S + 0.5 and hold.duration == T.HOLD_S
+    assert held - on >= T.DISCHARGE_S + 1.5 and hold.duration == T.HOLD_S  # the hold outlasts the 16.5 s of contact
     leave = _at(plan["left"], "wait for the discharge")[0]
     assert leave >= lifted - 0.5
     pull, _ = _at(plan["left"], "pull the board out")
@@ -307,16 +398,16 @@ def test_demo_pins_land_on_the_pads():
     plan = T.demo()
     _, poke = _at(plan["right"], "pins on the pads")
     tips_mid = np.asarray(poke.pos) + (T.ROD_AHEAD, 0.0, -T.PIN_BELOW)
-    expect = np.array([*T.PADS_XY, T.CAP_TOP]) + (T.AIM[0], T.AIM[1], -T.PRESS)
+    expect = np.array([*T.PADS_XY, T.BOARD_TOP]) + (T.AIM[0], T.AIM[1], -T.PRESS)
     assert np.allclose(tips_mid, expect, atol=1e-9)
     assert poke.pitch == pytest.approx(math.pi / 2)
     _, over = _at(plan["right"], "over the pads")
     assert over.pos[2] - T.PIN_BELOW > T.CASE_TOP + 0.02  # the hanging pins clear the case's walls
 
 
-def test_demo_grips_the_tool_near_its_middle():
+def test_demo_grips_the_tool_on_its_rod():
     _, close = _at(T.demo()["right"], "close")
-    assert abs(close.pos[0] - T.TOOL_XY[0]) <= 0.02 and close.pos[1] == T.TOOL_XY[1]
+    assert 0 < close.pos[0] - T.TOOL_XY[0] <= T.TOOL_SIZE[0] / 2 - 0.03  # the rod, past the middle, 3 cm in from its end and close.pos[1] == T.TOOL_XY[1]
     assert close.pos[2] - T.PAD_TIP_PAST_TCP > T.TOP  # the pad tips above the table
 
 
@@ -329,6 +420,8 @@ def test_demo_fingers_stay_off_the_pads():
     assert finger_y - (T.CAP_XY[1] + T.CAP_SIZE[1] / 2) > 0.005
     _, poke = _at(plan["right"], "pins on the pads")
     assert poke.pos[2] - T.CAP_TOP > 0.10
+    _, over = _at(plan["right"], "over the pads")
+    assert over.pos[2] - T.PIN_BELOW - T.CAP_TOP > 0.02  # the hanging pins clear the capacitor and the heatsink on the way
 
 
 def test_demo_places_the_board_in_the_box():
@@ -347,7 +440,7 @@ def test_demo_keeps_the_arms_apart():
     """The right arm stays in the right half and the left in the left half. While the right arm is at the capacitor,
     the left waits 15 cm or more away."""
     plan = T.demo()
-    assert max(w.pos[1] for w in plan["right"]) < 0.0
+    assert max(w.pos[1] for w in plan["right"]) < 0.02  # the right arm reaches 2 cm past the midline, to the test pads
     assert min(w.pos[1] for w in plan["left"]) > 0.0
     _, poke = _at(plan["right"], "pins on the pads")
     stage = np.asarray(T.STAGE)

@@ -8,8 +8,10 @@ x forward, y to the robot's left, z up) around an empty at its box's centre, and
 origin. No box is turned.
 
 - ``tool.usdc``: the discharge tool, inside the tool's 22 x 1.5 x 1.5 cm box (checked when exported).
-- ``capacitor.usdc``: the blue capacitor and its two pads, inside its 3 x 3 x 4 cm box (checked).
-- ``board.usdc``: the circuit board, inside its 10 x 14 x 0.2 cm box (checked).
+- ``capacitor.usdc``: the blue 330 uF, 400 V capacitor (a vent cross on its top, no terminals: its leads go through
+  the board), inside its 3 x 3 x 4 cm box (checked).
+- ``board.usdc``: the circuit board, with its two gold test pads (8 mm, 1 cm apart, marked + and -) wired by traces to the
+  capacitor's leads, inside its 10 x 13.2 x 0.2 cm box (checked).
 - ``heatsink.usdc``: the finned heatsink, and the board's other parts (transformer, small capacitors, coil), drawn
   only.
 - ``case.usdc``: the steel case, its rails, the fan grille and the mains inlet.
@@ -44,9 +46,10 @@ BOARD_C = (RAIL_X0 + BOARD_SIZE[0] / 2, 0.0, BOARD_BOTTOM + BOARD_SIZE[2] / 2)
 LIP_Z0 = BOARD_TOP + 0.003
 CAP_SIZE = (0.03, 0.03, 0.04)
 CAP_C = (BOARD_C[0] + 0.025, -0.038, BOARD_TOP + CAP_SIZE[2] / 2)
-PAD_GAP = 0.01
+PAD_GAP, PAD_D = 0.01, 0.008
+PADS_XY = (BOARD_C[0], -0.0025)  # the test pads' middle, between the capacitor and the heatsink
 SINK_SIZE = (0.06, 0.012, 0.04)
-SINK_C = (BOARD_C[0] - 0.01, 0.012, BOARD_TOP + SINK_SIZE[2] / 2)
+SINK_C = (BOARD_C[0] - 0.01, 0.024, BOARD_TOP + SINK_SIZE[2] / 2)
 TOOL_SIZE = (0.22, 0.015, 0.015)
 TOOL_C = (0.25, -0.30, TOP + TOOL_SIZE[2] / 2)
 BOX_C2, BOX_OUTER, BOX_WALL = (0.25, 0.20), (0.30, 0.20, 0.10), 0.006
@@ -184,7 +187,7 @@ def pcb_texture():
     x0, y0 = BOARD_C[0] - BOARD_SIZE[0] / 2, BOARD_C[1] - BOARD_SIZE[1] / 2
     cv = Canvas(x0, y0, BOARD_SIZE[0], BOARD_SIZE[1], 1000)
     H, W = cv.h, cv.w
-    copper, tin, silk = (np.zeros((H, W), bool) for _ in range(3))
+    copper, tin, silk, gold = (np.zeros((H, W), bool) for _ in range(4))
     # wide high-current traces
     for _ in range(26):
         p = np.array([RNG.uniform(x0 + 0.005, x0 + 0.095), RNG.uniform(y0 + 0.012, y0 + 0.128)])
@@ -198,8 +201,23 @@ def pcb_texture():
         cv.disc(tin, *pts[-1], 0.0011)
     # the parts' outlines and pads, matching where the heatsink's look puts them
     cv.ring(silk, CAP_C[0], CAP_C[1], 0.0158, 0.0006)
-    for s in (-1, 1):
-        cv.disc(tin, CAP_C[0] + 0.0095, CAP_C[1] + s * PAD_GAP / 2, 0.0014)
+    for s in (-1, 1):  # the capacitor's two leads, through the board under its can, and a wide trace from each to its
+        # test pad (the + lead to the + pad)
+        lead = (CAP_C[0] - 0.0095, CAP_C[1] + s * PAD_GAP / 2)
+        pad = (PADS_XY[0], PADS_XY[1] + s * PAD_GAP / 2)
+        cv.disc(tin, *lead, 0.0014)
+        rx = lead[0] - (0.0 if s == 1 else 0.006)  # the two traces run side by side, never crossing
+        cv.line(copper, [lead, (rx, lead[1]), (rx, pad[1]), pad], 0.0012)
+        cv.disc(gold, *pad, PAD_D / 2)
+        cv.ring(silk, *pad, PAD_D / 2 + 0.0012, 0.0004)
+    # the markings: + beside the pad on the capacitor's positive lead side (y +), - on the other, and a box round both
+    px, py = PADS_XY
+    for s, sign in ((1, "+"), (-1, "-")):
+        cx, cy = px + 0.0075, py + s * PAD_GAP / 2
+        cv.rect(silk, cx - 0.0018, cy - 0.0002, cx + 0.0018, cy + 0.0002)
+        if sign == "+":
+            cv.rect(silk, cx - 0.0002, cy - 0.0018, cx + 0.0002, cy + 0.0018)
+    cv.outline(silk, px - 0.0075, py - PAD_GAP / 2 - 0.0075, px + 0.0115, py + PAD_GAP / 2 + 0.0075, 0.0004)
     for x, y in ((BOARD_C[0] - 0.04, 0.045), (BOARD_C[0] - 0.04, 0.03), (BOARD_C[0] - 0.04, -0.005)):
         cv.ring(silk, x, y, 0.0045, 0.0004)
     tx, ty = BOARD_C[0] - 0.03, -0.035
@@ -214,6 +232,7 @@ def pcb_texture():
     rgb = np.array([0.05, 0.30, 0.13])[None, None, :] * mask[..., None]
     rgb[copper] = np.array([0.09, 0.42, 0.17])
     rgb[tin] = np.array([0.80, 0.80, 0.78])
+    rgb[gold] = np.array([0.88, 0.66, 0.22])
     rgb[silk] = np.array([0.92, 0.92, 0.88])
     return _save("board_top", rgb), (x0, y0, x0 + BOARD_SIZE[0], y0 + BOARD_SIZE[1])
 
@@ -373,11 +392,6 @@ def build_capacitor(M):
         bm.transform(Matrix.Translation(Vector((cx, cy, 0))) @ Matrix.Rotation(a + math.pi / 4, 4, "Z")
                      @ Matrix.Translation(Vector((-cx, -cy, 0))))
         L.mesh(f"vent_{i}", bm, M["vent"])
-    for s in (-1, 1):  # the two bare terminal pads, 5 mm across, 1 cm apart along y
-        L.mesh(f"pad_base_{s}", bm_cyl((cx, cy + s * PAD_GAP / 2, z1 - 0.0006), 0.0028, 0.0004, "Z", 32), M["black"],
-               smooth=True)
-        L.mesh(f"pad_{s}", bm_cyl((cx, cy + s * PAD_GAP / 2, z1 - 0.0002), 0.0025, 0.0004, "Z", 32, r2=0.0023),
-               M["tin"], smooth=True)
     return L
 
 
