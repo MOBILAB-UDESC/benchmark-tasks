@@ -17,6 +17,6 @@
   "run_limit": "2,400 steps (2 minutes at 20 Hz)",
   "reset_notes": "Slide the board back onto its rails until its front edge is 2 mm inside the case's open end, lay the tool back in its place, pins toward the robot.",
   "fidelity": "Rigid bodies, 240 Hz physics, 20 Hz control. Boxes collide: the board carries the capacitor and heatsink boxes, the tool is one box whose pin tips are points on its end face. No electricity or meter: discharge is the RC decay (3.3 s, 400 V) of the time both pins touch the pads, 16.5 s needed. No bleeder, voltage recovery or arcing. Contact is a 1.5 mm gap and 3 mm lateral test (pins are points on the box's end face), fingers a 2 mm test on their meshes. Friction 1.2.",
-  "scores": "Dream-1 was not run on this version. Demo: 1.0 (success at step 891 of 2,400)",
+  "scores": "Dream-1: 0.0 (ran to the step limit without finishing). Demo: 1.0 (success at step 891 of 2,400)",
   "media": "M-3ME5Y8"
 }
