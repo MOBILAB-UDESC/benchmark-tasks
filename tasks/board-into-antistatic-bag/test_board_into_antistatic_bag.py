@@ -1,6 +1,7 @@
 """Offline checks (no GPU): the task file loads, the bag's walls leave the cavity the board needs, the scorer covers
-each outcome (with the bag lying straight, turned and tilted), and the demo's grips, depths and reach. Run in the
-yam_arena environment:  python -m pytest -q test_board_into_antistatic_bag.py"""
+each outcome (with the bag lying straight, turned and tilted, held, hanging over the crate's wall, not released), the
+contact monitor's release rule, and the demo's grips, depths and reach. Run in the yam_arena environment:
+python -m pytest -q test_board_into_antistatic_bag.py"""
 
 from __future__ import annotations
 
@@ -9,7 +10,7 @@ import pathlib
 
 import numpy as np
 import pytest
-from yam_arena.demo import ArmPlan
+from yam_arena.demo import FINGER_OPEN, ArmPlan
 from yam_arena.station import BASES
 from yam_arena.task_file import ObjectState, load
 
@@ -37,6 +38,12 @@ def _quat(yaw=0.0, roll=0.0):
     ])
 
 
+@pytest.fixture(autouse=True)
+def grippers_away(monkeypatch):
+    """By default no gripper touches the bag or the board (the contact monitor needs the simulator)."""
+    monkeypatch.setattr(T.contact, "released", lambda: True)
+
+
 def _state(pos, quat=(0.0, 0.0, 0.0, 1.0), vel=(0.0, 0.0, 0.0)):
     pos = np.asarray(pos, float)
     return ObjectState(pos=pos, quat_xyzw=np.asarray(quat, float), lin_vel=np.asarray(vel, float),
@@ -44,7 +51,7 @@ def _state(pos, quat=(0.0, 0.0, 0.0, 1.0), vel=(0.0, 0.0, 0.0)):
 
 
 def _scene(bag_pos=BAG0, bag_quat=(0, 0, 0, 1), board_local=None, board_pos=BOARD0, bag_vel=(0, 0, 0),
-           board_yaw=0.0):
+           board_yaw=0.0, board_vel=(0, 0, 0)):
     """The bag where given, and the board at ``board_local`` (its centre in the bag's frame, lying in it) or at
     ``board_pos`` in the world."""
     rot = T._rot(bag_quat)
@@ -53,7 +60,7 @@ def _scene(bag_pos=BAG0, bag_quat=(0, 0, 0, 1), board_local=None, board_pos=BOAR
         qb = _quat_mul(np.asarray(bag_quat, float), _quat(board_yaw))
     else:
         qb = _quat(board_yaw)
-    return {"bag": _state(bag_pos, bag_quat, bag_vel), "board": _state(board_pos, qb)}
+    return {"bag": _state(bag_pos, bag_quat, bag_vel), "board": _state(board_pos, qb, board_vel)}
 
 
 def _quat_mul(a, b):
@@ -75,12 +82,18 @@ def _local(rear_past_mouth, x=0.0, z=None):
 
 
 FULL = _local(0.004)  # pushed in, near end 4 mm past the mouth
-IN_CRATE = np.array([*T.CRATE_XY, T.TOP + 0.012 + T.BAG_SIZE[2] / 2])
+ON_FLOOR_Z = T.CRATE_FLOOR + T.BAG_SIZE[2] / 2  # the bag's centre when it lies flat on the crate's floor
+IN_CRATE = np.array([*T.CRATE_XY, ON_FLOOR_Z])
 POSES = {
     "straight": (0.0, 0.0),
     "turned": (2.0, 0.0),  # turned 115 degrees about the vertical
-    "upside down": (0.7, math.pi),  # flipped over in the crate
+    "upside down": (0.7, math.pi),  # flipped over
     "on edge": (-1.0, math.pi / 2),
+}
+LYING = {  # the poses a bag can rest in on the crate's floor: flat, either face up, turned a little
+    "straight": (0.0, 0.0),
+    "turned": (0.3, 0.0),
+    "upside down": (0.4, math.pi),
 }
 
 
@@ -135,9 +148,21 @@ def test_ladder_with_the_bag_turned(pose):
     assert T.score(_scene(on_mat, q, _local(-0.06))) == 0.25  # the centre 1 cm past the mouth
     assert T.score(_scene(on_mat, q, _local(-0.002))) == 0.25  # near end 2 mm out
     assert T.score(_scene(on_mat, q, FULL)) == 0.5
-    in_crate = _scene(IN_CRATE, q, FULL)
-    assert T.success(in_crate) and T.score(in_crate) == 1.0
-    assert T.score(_scene(IN_CRATE, q, _local(-0.03))) == 0.25  # in the crate, the board half in
+    assert T.score(_scene(IN_CRATE + (0, 0, 0.07), q, FULL)) == 0.5  # held above the crate's floor
+    assert T.score(_scene(IN_CRATE + (0, 0, 0.07), q, _local(-0.03))) == 0.25  # over the crate, the board half in
+
+
+@pytest.mark.parametrize("pose", LYING)
+def test_full_score_with_the_bag_lying_in_the_crate(pose):
+    yaw, roll = LYING[pose]
+    scene = _scene(IN_CRATE, _quat(yaw, roll), FULL)
+    assert T.bag_in_crate(scene)
+    assert T.success(scene) and T.score(scene) == 1.0
+
+
+def test_bag_on_edge_in_the_crate_is_not_full():
+    scene = _scene(IN_CRATE + (0, 0, 0.02), _quat(-1.0, math.pi / 2), FULL)  # on its long edge, in the crate
+    assert not T.bag_in_crate(scene) and T.score(scene) == 0.5
 
 
 def test_far_edge_against_the_end():
@@ -162,8 +187,94 @@ def test_bag_carried_or_beside_the_crate():
     assert T.score(held) == 0.5
     moving = _scene(IN_CRATE, board_local=FULL, bag_vel=(0.05, 0.0, 0.0))
     assert not T.success(moving) and T.score(moving) == 0.5
+    board_moving = _scene(IN_CRATE, board_local=FULL, board_vel=(0.05, 0.0, 0.0))
+    assert not T.success(board_moving) and T.score(board_moving) == 0.5
     beside = _scene(IN_CRATE + (0.0, 0.14, 0.0), board_local=FULL)  # past the crate's end
     assert T.score(beside) == 0.5
+
+
+# -- what the reviewers named: the centre and the speed are not enough ---------------------------------------------
+
+
+def test_filled_bag_still_held_in_the_crate_is_not_released(monkeypatch):
+    """The bag lies in the crate and is still, but a gripper still touches it: 0.5, not 1.0."""
+    scene = _scene(IN_CRATE, board_local=FULL)
+    assert T.score(scene) == 1.0
+    monkeypatch.setattr(T.contact, "released", lambda: False)
+    assert not T.success(scene) and T.score(scene) == 0.5
+
+
+def test_bag_held_still_above_the_crate_floor_is_not_resting_on_it():
+    """Held still 2 cm up, 1 cm up, 4 mm up: inside the walls and below the rim, but not on the floor."""
+    for up in (0.02, 0.01, 0.004):
+        scene = _scene(IN_CRATE + (0, 0, up), board_local=FULL)
+        assert not T.bag_in_crate(scene) and T.score(scene) == 0.5, up
+    assert T.score(_scene(IN_CRATE + (0, 0, 0.002), board_local=FULL)) == 1.0  # 2 mm up is on the floor
+
+
+def test_bag_hanging_over_the_crate_wall_is_not_inside():
+    """Its centre is over the crate's floor (the old test passed up to 11.2 cm along y), but its end is over the
+    wall."""
+    for dy in (0.05, 0.08, 0.11):
+        scene = _scene(IN_CRATE + (0.0, dy, 0.0), board_local=FULL)
+        assert not T.bag_in_crate(scene) and T.score(scene) == 0.5, dy
+    wide = _scene(IN_CRATE + (0.06, 0.0, 0.0), board_local=FULL)  # 4 cm over a long wall
+    assert not T.bag_in_crate(wide) and T.score(wide) == 0.5
+    assert T.score(_scene(IN_CRATE + (0.0, 0.04, 0.0), board_local=FULL)) == 1.0  # 4 cm along y still fits
+
+
+def test_bag_leaning_on_the_wall_is_not_flat_on_the_floor():
+    leaning = _scene(IN_CRATE + (0, 0, 0.03), _quat(0.0, 0.5), FULL)  # tilted 29 degrees
+    assert not T.bag_in_crate(leaning) and T.score(leaning) == 0.5
+
+
+def test_bag_on_the_rim_is_not_inside():
+    scene = _scene((T.CRATE_XY[0], T.CRATE_XY[1], T.CRATE_RIM + T.BAG_SIZE[2] / 2), board_local=FULL)
+    assert not T.bag_in_crate(scene) and T.score(scene) == 0.5
+
+
+def test_fully_bagged_board_elsewhere_keeps_half():
+    for pos in (BAG0 + (0.0, 0.0, 0.05), np.array([0.2, -0.1, T.TOP + 0.01]), IN_CRATE + (0.0, 0.14, 0.0)):
+        assert T.score(_scene(pos, board_local=FULL)) == 0.5
+
+
+# -- the contact monitor's release rule -------------------------------------------------------------------------
+
+
+@pytest.fixture
+def monitor(monkeypatch):
+    """A working contact monitor with 24 substeps (0.1 s) read, and the real ``released``."""
+    monkeypatch.undo()  # the autouse fixture's stub
+    mon = {"view": object(), "stage": None, "n": 240, "last": None, "dt": 1 / 240, "polls": 240, "err": None}
+    monkeypatch.setattr(T.contact, "_MON", mon)
+    return mon
+
+
+def test_released_needs_a_working_monitor(monitor):
+    assert T.contact.released()
+    monitor["err"] = "boom"
+    assert not T.contact.released()  # fails closed
+    monitor.update(err=None, view=None)
+    assert not T.contact.released()
+    monitor.update(view=object(), polls=0)
+    assert not T.contact.released()
+
+
+def test_released_after_a_touch_waits_out_the_window(monitor):
+    monitor["last"] = 240  # touched in the latest substep
+    assert not T.contact.released()
+    monitor["n"] = 240 + int(T.contact.RELEASE_S * 240) - 1
+    assert not T.contact.released()
+    monitor["n"] = 240 + int(T.contact.RELEASE_S * 240)
+    assert T.contact.released()
+
+
+def test_the_monitor_reads_every_robot_link_and_both_bodies():
+    assert T.contact.HELD == ("bag", "board")
+    assert T.contact.TOUCH_SEP <= 0.001  # contact, not "near"
+
+
+# -- the rest ----------------------------------------------------------------------------------------------------------
 
 
 def test_fell_off_the_table():
@@ -196,6 +307,30 @@ def test_demo_order():
     away, _ = _at(plan["right"], "away")
     lifted, _ = _at(plan["left"], "lift")
     assert held < started and pushed < away <= T.RIGHT_DONE < lifted
+
+
+def test_demo_ends_with_both_hands_letting_go_in_the_crate():
+    plan = T.demo()
+    for arm in ("left", "right"):
+        assert plan[arm][-1].finger == FINGER_OPEN, arm  # both hands open at the end
+    open_at, _ = _at(plan["left"], "let go")
+    lifted, _ = _at(plan["left"], "up")
+    assert open_at < lifted
+    let_go = next(w for w in plan["left"] if w.label == "let go")
+    assert let_go.pos[2] - T.BAG_BELOW_TCP < T.CRATE_RIM  # the bag is let go below the crate's rim
+    assert plan["left"][-1].pos[2] > T.CRATE_RIM + T.BAG_SIZE[2]  # the left hand ends clear of the bag
+    # the right hand ends well away from the bag, which lies in the crate
+    right_end = np.asarray(plan["right"][-1].pos[:2])
+    assert np.hypot(*(right_end - np.asarray(T.CRATE_XY))) > 0.2
+
+
+def test_demo_lays_the_bag_inside_the_crate_walls():
+    """Lowered along y over the crate's centre, the bag's whole outline is 4 cm or more inside the walls."""
+    along_y = np.array([T.BAG_SIZE[0], T.BAG_SIZE[1]]) / 2
+    # the left hand holds the closed end, so the bag's centre is 6.4 cm toward -y from the hand: over the crate's
+    centre = np.asarray(T.PLACE_XY) - np.array([0.0, T.HOLD_S - T.BAG_SIZE[1] / 2])
+    assert centre == pytest.approx(np.asarray(T.CRATE_XY))
+    assert np.all(np.abs(centre - np.asarray(T.CRATE_XY)) + along_y <= np.asarray(T.CRATE_INNER) / 2 - 0.04 + 1e-9)
 
 
 def test_demo_board_rides_mid_cavity():

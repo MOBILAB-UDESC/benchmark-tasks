@@ -5,7 +5,8 @@ away. The bag's cavity is 7.3 cm wide, 14.8 cm deep and 8 mm high, with a thumb 
 at the mouth. The board's near end and the bag's closed end overhang the mat's ends by 3 cm. A grey plastic crate
 (25.4 x 17 x 7.2 cm) stands on the robot's left, behind the bag.
 
-The task: hold the bag, slide the board flat into it until it is fully inside, then lay the bag in the crate.
+The task: hold the bag, slide the board flat into it until it is fully inside, then lay the bag in the crate and let
+go of it.
 
 The bag and the board slide on the mat (friction 0.25), and the board grips the bag's inside (friction 1.0): pushing
 the board in drags the bag along unless the other hand holds it. The bag is a rigid stand-in for a soft one:
@@ -22,6 +23,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
+import contact  # noqa: E402
 import numpy as np  # noqa: E402
 from envelope import Envelope, envelope, surface  # noqa: E402
 from looks import dress  # noqa: E402
@@ -109,7 +111,8 @@ dress(LOOKS)
 # -- scoring ---------------------------------------------------------------------------------------------------------
 TOL = 0.002  # m of slack on the cavity's walls (contacts let shapes overlap a little)
 NEAR_END = 0.01  # m: the board's far edge within this of the bag's closed end
-IN_CRATE_XY = (CRATE_INNER[0] / 2 - 0.01, CRATE_INNER[1] / 2 - 0.01)  # the bag's centre this close to the crate's
+ON_FLOOR = (-0.002, 0.003)  # m: the bag's lowest point relative to the crate's floor (penetration slack, gap)
+FLAT = 0.004  # m: the bag's height above its thickness when it lies flat (its highest point minus its lowest)
 OFF_TABLE_Z = -0.02  # m above the table: an object whose centre is lower has fallen off the table
 
 
@@ -175,13 +178,28 @@ def far_edge_at_end(objects) -> bool:
     return bool(depth_in(objects) >= CAVITY[1] - NEAR_END)
 
 
+def bag_corners(objects) -> np.ndarray:
+    """The eight corners of the bag's outside (its box, which is its collider's outline), in the station frame."""
+    bag = objects["bag"]
+    rot = _rot(bag.quat_xyzw)
+    half = np.asarray(BAG_SIZE) / 2
+    return np.array([bag.pos + rot @ (half * np.array([sx, sy, sz])) for sx in (-1, 1) for sy in (-1, 1)
+                     for sz in (-1, 1)])
+
+
 def bag_in_crate(objects) -> bool:
-    """The bag's centre is over the crate's floor (within 7 x 11.2 cm of its centre) and below its rim."""
-    c = objects["bag"].pos
+    """The whole bag is inside the crate's walls and rests on its floor: every corner between the inner walls
+    (24.4 x 16 cm) and below the rim, the bag's lowest point within 3 mm above the floor (2 mm of slack below it) and
+    its highest point no more than its thickness and 4 mm above that, so it lies flat on the floor."""
+    c = bag_corners(objects)
+    inside = ((np.abs(c[:, 0] - CRATE_XY[0]) <= CRATE_INNER[0] / 2)
+              & (np.abs(c[:, 1] - CRATE_XY[1]) <= CRATE_INNER[1] / 2))
+    low, high = float(c[:, 2].min()), float(c[:, 2].max())
     return bool(
-        abs(c[0] - CRATE_XY[0]) <= IN_CRATE_XY[0]
-        and abs(c[1] - CRATE_XY[1]) <= IN_CRATE_XY[1]
-        and c[2] < CRATE_RIM
+        inside.all()
+        and high < CRATE_RIM
+        and CRATE_FLOOR + ON_FLOOR[0] <= low <= CRATE_FLOOR + ON_FLOOR[1]
+        and high - low <= BAG_SIZE[2] + FLAT
     )
 
 
@@ -192,17 +210,18 @@ def _violation(objects) -> bool:
 
 
 def success(objects) -> bool:
-    """The board is fully in the bag, its far edge within 1 cm of the closed end, and the bag lies still in the
-    crate."""
+    """The board is fully in the bag, its far edge within 1 cm of the closed end, the whole bag lies on the crate's
+    floor inside its walls, no gripper touches the bag or the board, and both lie still."""
     if _violation(objects):
         return False
     return bool(fully_in(objects) and far_edge_at_end(objects) and bag_in_crate(objects)
-                and objects["bag"].resting())
+                and objects["bag"].resting() and objects["board"].resting() and contact.released())
 
 
 def score(objects) -> float:
     """1.0: success. 0.5: the board fully in the bag (its far edge within 1 cm of the closed end), the bag anywhere
-    else. 0.25: the board's centre inside the bag. 0 otherwise, and 0 if the board or the bag fell off the table."""
+    else, held, or not yet lying still on the crate's floor. 0.25: the board's centre inside the bag. 0 otherwise,
+    and 0 if the board or the bag fell off the table."""
     if _violation(objects):
         return 0.0
     if success(objects):
@@ -216,8 +235,10 @@ def score(objects) -> float:
 # All straight-down grips, the fingers closing across the line. Left arm: closes across the bag's width at its closed
 # end and holds it there. Right arm: closes across the board's width at its near end (pad tips 3 mm below it, past
 # the mat's end), lifts it so it rides in the middle of the cavity, slides it into the mouth until the pads are 3 mm
-# short of it, lets go, closes its fingers behind the board and pushes it the last 3.5 cm through the thumb notch. Then
-# the left arm lifts the bag, turns it along the crate and lays it in. Numbers are TCP positions, ``on_line`` points.
+# short of it, lets go, closes its fingers behind the board and pushes it the last 3.5 cm through the thumb notch,
+# then leaves with open fingers. The left arm then lifts the bag, turns it along the crate, lowers it to 2 cm above the
+# floor, opens its fingers (the bag drops and lies on the floor) and rises, so both hands end open and clear of the
+# bag. Numbers are TCP positions, ``on_line`` points.
 GRIP_YAW = LINE_ANGLE - math.pi  # -60 degrees: fingers across the line, the right wrist camera away from the left
 PLACE_YAW = -math.pi / 2  # the left arm turns the bag along the crate (along y) on the way
 PAD_HALF = 0.0132  # m: half a finger pad's width along the line
@@ -250,6 +271,7 @@ BAG_BELOW_TCP = HOLD_Z - MAT_TOP  # the bag's bottom below the TCP while it is h
 # Over the crate the bag lies along y, its closed end (held) toward +y: its centre is then over the crate's.
 PLACE_XY = (CRATE_XY[0], CRATE_XY[1] + (HOLD_S - BAG_SIZE[1] / 2))
 PLACE_Z = CRATE_FLOOR + 0.02 + BAG_BELOW_TCP  # the bag's bottom 2 cm above the crate's floor
+LET_GO = FINGER_OPEN  # the left hand's fingers once the bag is down (an ablation holds on: BAG_GRIP)
 RIGHT_DONE = 14.5  # s: the right arm has pushed the board in and left by then
 
 
@@ -273,7 +295,7 @@ def demo():
         w(0.8, at(PUSH_FROM_S, PUSH_Z), FINGER_CLOSED, "down behind the board", yaw),
         w(1.5, at(PUSH_S, PUSH_Z), FINGER_CLOSED, "push it in", yaw),
         w(0.6, at(PUSH_S, TOP + 0.06), FINGER_CLOSED, "up", yaw),
-        w(1.2, AWAY, FINGER_CLOSED, "away", yaw),
+        w(1.2, AWAY, FINGER_OPEN, "away", yaw),
     ]
     held = 1.5 + 1.5 + 0.8
     left = [
@@ -284,7 +306,7 @@ def demo():
         w(1.5, at(HOLD_S, CARRY_Z), BAG_GRIP, "lift", yaw),
         w(2.0, (*PLACE_XY, CARRY_Z), BAG_GRIP, "over the crate", PLACE_YAW),
         w(1.2, (*PLACE_XY, PLACE_Z), BAG_GRIP, "lower", PLACE_YAW),
-        w(0.6, (*PLACE_XY, PLACE_Z), FINGER_OPEN, "let go", PLACE_YAW),
-        w(1.0, (*PLACE_XY, CARRY_Z), FINGER_OPEN, "up", PLACE_YAW),
+        w(0.6, (*PLACE_XY, PLACE_Z), LET_GO, "let go", PLACE_YAW),
+        w(1.0, (*PLACE_XY, CARRY_Z), LET_GO, "up", PLACE_YAW),
     ]
     return {"right": right, "left": left}
