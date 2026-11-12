@@ -68,7 +68,7 @@ inspect-robots run --embodiment yam_arena --policy yam_scripted \
   --scorer task_score --max-steps 700 --store-frames --log-dir ~/yam-eval/clip-lead-catch-offcut-demo
 ```
 
-- Dream-1 was not run on this version of the scene and scoring. The demo scores 1.0.
+- Dream-1: 0.0 (ran to the step limit without finishing). The demo scores 1.0.
 - The run prints `task_score` at the end. With `-E object_jitter=0` the layout is fixed and no seed is needed.
   Keep it at 0: jitter would move the nippers and the lead's pieces off their joints.
 - The demo. Left arm: over the lead, opens 2.4 cm, comes down so its pad tips sit 8 mm over the board, and closes on
