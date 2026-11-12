@@ -6,11 +6,23 @@ right end, at y = -0.175, on the right arm's side. It locks the card in the slot
 foam-lined tray (25 x 15 cm, 3 cm walls) stands on the robot's left, at (0.24, 0.26). The right arm presses the
 latch and the left arm lifts the card, 15 cm apart, so the arms don't meet.
 
-The task: press the latch, lift the graphics card straight up out of the slot and put it in the tray.
+The task: press the latch and hold it, lift the graphics card straight up out of the slot and put it in the tray.
 
-The latch is a sprung button (4 mm travel). The card is locked by a bond that holds 60 N: pulled without the latch
-pressed, the card stays put until the bond breaks, and a broken latch scores 0 for the rest of the trial. The slot's
-rails let the card out straight up only. ``bonds.py`` makes the bond and the button.
+How the latch locks the card (the linkage, which ``bonds.py`` stands in for): the card's near end has a steel end plate
+with a hole 9 mm tall, its lower edge 1.5 mm above the card's bottom. A 3 mm steel pin, axis 8 mm above the board,
+passes through the hole, 5 mm above the hole's lower edge, so the card can rise 5 mm before the edge meets the pin.
+The pin is on a 5 cm push rod in a covered groove along the slot's axis, and the rod's other end has a 45 degree
+wedge under the orange button. Pressing the button 3 mm slides the rod 3 mm and pulls the pin 3 mm out of the hole
+(2.5 mm engaged): the card is free while the button is down. Let go and the spring (500 N/m, 0 N at rest, 2 N at full
+travel) pushes the pin back into the hole if the card is within 5 mm of seated. If the card is raised more than 5 mm,
+the pin meets the plate's face instead and the card stays free.
+
+In the simulation the lock is a bond that holds 60 N, between the card and the board. A step hook reads the button at
+every control step: down 3 mm or more, the bond is off. Up, the bond is on again once the card is seated (within
+1 mm), and it holds to 60 N. Pulled harder, or raised 5 mm or more with the button up after the pin was in the hole,
+the pin is overloaded and the latch is broken: 0 for the rest of the trial, even if the card is then put in the
+tray. So is a card pried 5 degrees or more in the slot. The slot's rails let the card out straight up only. To
+score 1.0 the card must be out of both hands and lie still on the tray's floor.
 
 Run it:  inspect-robots run --embodiment yam_arena -E task=latch_and_lift_graphics_card.py --scorer task_score ...
 """
@@ -24,7 +36,7 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 import numpy as np  # noqa: E402
-from bonds import Bonded, Sliding, on_reset, on_step, release  # noqa: E402
+from bonds import Bonded, Sliding, on_reset, on_step, relock, release  # noqa: E402
 from looks import dress  # noqa: E402
 from yam_arena.constants import PAD_TIP_PAST_TCP  # noqa: E402
 from yam_arena.demo import FINGER_CLOSED, FINGER_OPEN, Waypoint  # noqa: E402
@@ -97,7 +109,11 @@ LATCH_U = 0.195  # 5.5 cm before the card, so the two grippers stay apart
 LATCH_SIZE = (0.02, 0.012, 0.015)
 LATCH_TRAVEL = 0.004  # m: how far it goes down
 LATCH_RATE = 500.0  # N/m: 2 N at full travel
-PRESSED = 0.003  # m down: the latch has released the card
+PRESSED = 0.003  # m down: the wedge has pulled the pin out of the card's hole (the pin is 2.5 mm into it)
+PIN_ENGAGED = 0.0025  # m: how far the pin reaches into the hole in the card's end plate
+# The card's end plate and the pin, heights above the card's bottom edge and the board (drawn nowhere, see the docstring)
+PIN_AXIS, PIN_D = 0.008, 0.003  # m: the pin's axis above the board and its diameter, so its bottom is at 6.5 mm
+HOLE_BOTTOM, HOLE_H = 0.0015, 0.009  # m: the hole's lower edge above the card's bottom edge, and its height
 LATCH_BOTTOM = BOARD_TOP + LATCH_TRAVEL + 0.001  # it hangs in its housing, clear of the board at full travel
 LATCH_TOP = LATCH_BOTTOM + LATCH_SIZE[2]
 LATCH = Sliding(
@@ -156,28 +172,43 @@ LOOKS = {"card": "card.usdc", "latch": "latch.usdc", "mainboard": "mainboard.usd
 dress(LOOKS, hide=[b.name for b in (*RAILS, *HOUSING, *TRAY[1:])])
 
 # -- scoring ---------------------------------------------------------------------------------------------------------
-LIFTED = 0.005  # m up from its start: the card has been raised
+LIFTED = 0.005  # m up from its start: the pin's play (pin bottom 6.5 mm, hole's lower edge 1.5 mm). A seated card
+# raised this far with the button up has hit the pin
 OUT_SHIFT = 0.03  # m sideways from its start: the card has left the slot
+SEATED = 0.001  # m: a card this close to its start (up and sideways) is seated, and the released pin locks it again
+PRY_DEG = 5.0  # degrees: a card tilted this far from upright, with its bottom still between the rails, pries the slot
 IN_TRAY_XY = (0.09, 0.05)  # m: the card's centre within this of the tray's centre is over its 23 x 13 cm floor
-IN_TRAY_Z = 0.07  # m above the tray floor: lower than this, the card lies or stands in the tray (5.5 cm standing)
+ON_FLOOR = 0.003  # m: the card's four lowest corners this close to the tray floor's top are touching it
+HOLD_REACH = 0.03  # m: a gripper whose TCP is this close to the card's box is on it
+HOLD_GAP = 0.004  # m: pads at most this much wider apart than the card's thickness are closed on it, or on nothing
 OFF_TABLE_Z = -0.02  # m above the table: an object whose centre is lower has fallen off the table
 
-# What the episode remembers: the latch was pressed at some step (the card is free from then on), and the card moved
-# while it was still locked (the latch is broken).
-STATE = {"unlocked": False, "broken": False}
+# What the episode remembers: whether the pin is in the hole (the button up and the card within 5 mm of seated at the
+# last step), whether the latch is broken, and whether a gripper is on the card. The button is read at every step.
+STATE = {"engaged": True, "broken": False, "held": False}
 
 
 @on_reset
 def reset_memory(env=None) -> None:
-    STATE["unlocked"] = STATE["broken"] = False
+    STATE.update(engaged=True, broken=False, held=False)
 
 
 def _finite(objects) -> bool:
     return all(np.all(np.isfinite(s.pos)) and np.all(np.isfinite(s.lin_vel)) for s in objects.values())
 
 
+def matrix(q) -> np.ndarray:
+    """The rotation matrix of a unit quaternion x y z w."""
+    x, y, z, w = (float(v) for v in q)
+    return np.array([
+        [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+        [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+        [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+    ])
+
+
 def latch_pressed(objects) -> bool:
-    """The latch is down 3 mm or more."""
+    """The button is down 3 mm or more: the pin is out of the hole."""
     return bool(objects["latch"].pos[2] <= LATCH.pos[2] - PRESSED)
 
 
@@ -192,20 +223,62 @@ def card_moved(objects) -> bool:
     return bool(d[2] >= LIFTED or np.hypot(d[0], d[1]) >= OUT_SHIFT)
 
 
+def card_seated(objects) -> bool:
+    """The card is within 1 mm of its start, up and sideways."""
+    d = objects["card"].pos - np.asarray(CARD.pos)
+    return bool(abs(d[2]) < SEATED and np.hypot(d[0], d[1]) < SEATED)
+
+
 def out_of_slot(objects) -> bool:
     """The card's bottom is above the rails (up 1.2 cm or more), or it is 3 cm or more from the slot sideways."""
     d = objects["card"].pos - np.asarray(CARD.pos)
     return bool(d[2] >= SLOT_DEPTH or np.hypot(d[0], d[1]) >= OUT_SHIFT)
 
 
+def card_tilt_deg(objects) -> float:
+    """How far the card's height axis is from vertical, in degrees."""
+    up = matrix(objects["card"].quat_xyzw)[2, 2]
+    return float(math.degrees(math.acos(min(1.0, max(-1.0, up)))))
+
+
+def slot_pried(objects) -> bool:
+    """The card tilts 5 degrees or more from upright while its bottom is still between the rails."""
+    return bool(not out_of_slot(objects) and card_tilt_deg(objects) >= PRY_DEG)
+
+
+def hook_in_hole(objects) -> bool:
+    """The pin is in the hole now: the button up and the card raised less than 5 mm."""
+    return bool(not latch_pressed(objects) and not card_moved(objects))
+
+
 def in_tray(objects) -> bool:
-    """The card is in the tray: centre within 9 x 5 cm of the tray's centre and under 7 cm above its floor."""
+    """The card's centre is within 9 x 5 cm of the tray's centre."""
     c = objects["card"].pos
-    return bool(
-        abs(c[0] - TRAY_XY[0]) < IN_TRAY_XY[0]
-        and abs(c[1] - TRAY_XY[1]) < IN_TRAY_XY[1]
-        and c[2] < TRAY_FLOOR_Z + IN_TRAY_Z
-    )
+    return bool(abs(c[0] - TRAY_XY[0]) < IN_TRAY_XY[0] and abs(c[1] - TRAY_XY[1]) < IN_TRAY_XY[1])
+
+
+def on_tray_floor(objects) -> bool:
+    """The card is supported by the tray's floor: its four lowest corners within 3 mm of the floor's top, so it lies
+    flat on a face (an edge, or an end, is a face too) and does not lean on a wall."""
+    card = objects["card"]
+    half = np.asarray(CARD_SIZE) / 2
+    corners = np.array([[sx, sy, sz] for sx in (-1, 1) for sy in (-1, 1) for sz in (-1, 1)]) * half
+    heights = np.sort(card.pos[2] + corners @ matrix(card.quat_xyzw)[2])
+    return bool(heights[3] - TRAY_FLOOR_Z <= ON_FLOOR and heights[0] >= TRAY_FLOOR_Z - ON_FLOOR)
+
+
+def held_by(objects, grippers: dict) -> bool:
+    """Whether a gripper is on the card: its TCP (the point between the pads) within 3 cm of the card's box and its
+    pads at most 4 mm wider apart than the card's 2 cm thickness, which includes pads shut on nothing. A gripper
+    opened wider than that, or away from the card, has let go. ``grippers`` maps each arm to (TCP, the pads' gap)."""
+    card = objects["card"]
+    rot = matrix(card.quat_xyzw)
+    reach = np.asarray(CARD_SIZE) / 2 + HOLD_REACH
+    for point, gap in grippers.values():
+        local = rot.T @ (np.asarray(point, float) - card.pos)
+        if bool(np.all(np.abs(local) <= reach)) and gap <= CARD_SIZE[1] + HOLD_GAP:
+            return True
+    return False
 
 
 def _violation(objects) -> bool:
@@ -215,47 +288,91 @@ def _violation(objects) -> bool:
 
 
 def _remember(objects) -> None:
-    if latch_pressed(objects):
-        STATE["unlocked"] = True
-    if not STATE["unlocked"] and card_moved(objects):
+    """Read the button and the card at this step. The latch breaks if the pin, in the hole at the last step, has been
+    forced up out of it with the button up, or if the slot is pried. Nothing about a press is remembered."""
+    if STATE["engaged"] and card_moved(objects) and not latch_pressed(objects):
         STATE["broken"] = True
+    if slot_pried(objects):
+        STATE["broken"] = True
+    STATE["engaged"] = hook_in_hole(objects)
+
+
+def bond_command(objects) -> str:
+    """What the card's bond does at this step, from the button now (never from an earlier press): "release" while it
+    is down 3 mm or more, "relock" when it is up and the card is seated, "" otherwise (the card is raised and the pin
+    is not in the hole, so there is nothing to lock)."""
+    if latch_pressed(objects):
+        return "release"
+    return "relock" if card_seated(objects) else ""
+
+
+def grippers(env) -> dict:
+    """Each arm's TCP (the point between its finger pads) and its pads' gap, in the task file's frame."""
+    from yam_arena.constants import TCP_OFFSET
+
+    def arr(t) -> np.ndarray:
+        t = getattr(t, "torch", t)
+        return t.detach().cpu().numpy().astype(float)
+
+    base = env.unwrapped
+    origin = arr(base.scene.env_origins)[0]
+    out = {}
+    for arm in ("left_robot", "right_robot"):
+        robot = base.scene[arm]
+        bodies = list(robot.body_names)
+        joints = list(robot.joint_names)
+        i = bodies.index("gripper")
+        pos, quat = arr(robot.data.body_pos_w)[0, i], arr(robot.data.body_quat_w)[0, i]
+        q = arr(robot.data.joint_pos)[0]
+        tcp = pos - origin + matrix(quat) @ np.asarray(TCP_OFFSET)
+        out[arm] = (tcp, -float(q[joints.index("joint7")] + q[joints.index("joint8")]))
+    return out
 
 
 @on_step
-def free_the_card(env) -> None:
-    """Once the latch is pressed, the card's bond is released for the rest of the episode."""
+def watch(env) -> None:
+    """Every control step: read the button, switch the card's bond with it, check for damage, and see whether a
+    gripper is on the card."""
     from yam_arena.scene import object_states
 
     objects = object_states(env, ["card", "latch"])
-    if _finite(objects):
-        _remember(objects)
-    if STATE["unlocked"]:
-        release("card")
+    if not _finite(objects):
+        return
+    _remember(objects)
+    STATE["held"] = held_by(objects, grippers(env))
+    command = bond_command(objects)
+    if command == "release":
+        release("card")  # the pin is out of the hole: the card is free while the button is down
+    elif command == "relock":
+        relock("card")  # the button is up and the card is seated: the pin is back in the hole
 
 
 def success(objects) -> bool:
-    """The card lies still in the tray and the latch was never forced."""
+    """The card lies still on the tray's floor, out of every gripper, and the latch is whole."""
     if _violation(objects):
         return False
     _remember(objects)
-    return bool(not STATE["broken"] and in_tray(objects) and objects["card"].resting())
+    return bool(
+        not STATE["broken"] and not STATE["held"] and in_tray(objects) and on_tray_floor(objects)
+        and objects["card"].resting()
+    )
 
 
 def score(objects) -> float:
-    """1.0: success. 0.5: the card is out of the slot (held, or set down out of the tray). 0.25: the latch has been
-    pressed and the card raised 5 mm or more, but it is still in the slot. 0 otherwise, and 0 for the rest of the
-    trial once the card moved while the latch had not been pressed (the latch is broken), or if the card fell off
-    the table."""
+    """1.0: success. 0.5: the card is out of the slot (held, held above the tray, or set down anywhere else, or
+    still in a hand in the tray). 0.25: the card raised 5 mm or more (it can only have come with the button
+    down), but it is still in the slot. 0 otherwise, and 0 for the rest of the trial once the pin was forced or the
+    slot pried (the latch is broken), or if the card fell off the table."""
     if _violation(objects):
         return 0.0
     _remember(objects)
     if STATE["broken"]:
         return 0.0
-    if in_tray(objects) and objects["card"].resting():
+    if not STATE["held"] and in_tray(objects) and on_tray_floor(objects) and objects["card"].resting():
         return 1.0
     if out_of_slot(objects):
         return 0.5
-    return 0.25 if STATE["unlocked"] and card_lift(objects) >= LIFTED else 0.0
+    return 0.25 if card_lift(objects) >= LIFTED else 0.0
 
 
 # -- scripted demo ---------------------------------------------------------------------------------------------------
@@ -275,6 +392,7 @@ PRESS_DEPTH = 0.012  # m: the pad tips are sent this far below the latch's top (
 PRESS_Z = LATCH_TOP - PRESS_DEPTH + PAD_TIP_PAST_TCP
 HOVER_Z = TOP + 0.14
 PRESS_YAW = TURN  # the right gripper's turn over the latch
+PRESS_HOLD_S = 4.0  # s: the right arm keeps the button down this long, past the end of the left arm's lift (3.3 s)
 
 
 def demo():
@@ -286,7 +404,7 @@ def demo():
         "right": [
             w(1.5, (lx, ly, HOVER_Z), FINGER_CLOSED, "over the latch", PRESS_YAW),
             w(1.5, (lx, ly, PRESS_Z), FINGER_CLOSED, "press", PRESS_YAW),
-            w(4.0, (lx, ly, PRESS_Z), FINGER_CLOSED, "hold", PRESS_YAW),
+            w(PRESS_HOLD_S, (lx, ly, PRESS_Z), FINGER_CLOSED, "hold", PRESS_YAW),
             w(1.0, (lx, ly, HOVER_Z), FINGER_CLOSED, "retreat", PRESS_YAW),
         ],
         "left": [

@@ -7,7 +7,8 @@ yam_arena's task files spawn plain primitives. This module adds two boxes that g
   ``physics:breakTorque`` is ``twist`` newton metres. Pull or push harder than ``hold``, or turn it harder than
   ``twist``, and the bond breaks for the rest of the trial. The joint sits at the centre of the box's bottom face.
   Old thermal paste, a glued-on label, a card locked in its slot. :func:`release` undoes a bond on cue (a latch that
-  frees the card) by disabling its joint, and every reset enables the released bonds again.
+  frees the card) by disabling its joint, :func:`relock` does it again (the latch let go), and every reset enables
+  the released bonds again.
 - :class:`Sliding`: a ``Box`` with a mass on a prismatic joint along one of its own axes, between ``lower`` and
   ``upper`` (metres from where it spawns, which is its rest), pushed back to rest by a spring of ``rate`` N/m with
   ``damping`` N s/m. A button, a latch, a drawer. The other side of the joint is the object ``to``, or the bench.
@@ -29,7 +30,7 @@ from dataclasses import dataclass
 
 from yam_arena.task_file import Box
 
-__all__ = ["Bonded", "Sliding", "install", "on_reset", "on_step", "release", "released"]
+__all__ = ["Bonded", "Sliding", "install", "on_reset", "on_step", "relock", "release", "released"]
 
 
 @dataclass(frozen=True)
@@ -196,6 +197,15 @@ def release(name: str) -> None:
         raise KeyError(f"{name} has not spawned (release() runs inside the simulation)")
     _set_bond(name, False)
     _RELEASED.add(name)
+
+
+def relock(name: str) -> None:
+    """Enable the joint of ``name`` again after :func:`release`: the box is bonded where it stands, so call it only
+    when the box is at the pose its joint was authored for. A no-op if it is not released."""
+    if name not in _RELEASED:
+        return
+    _set_bond(name, True)
+    _RELEASED.discard(name)
 
 
 def released(name: str) -> bool:
