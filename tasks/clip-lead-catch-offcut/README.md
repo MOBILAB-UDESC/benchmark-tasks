@@ -68,18 +68,18 @@ inspect-robots run --embodiment yam_arena --policy yam_scripted \
   --scorer task_score --max-steps 700 --store-frames --log-dir ~/yam-eval/clip-lead-catch-offcut-demo
 ```
 
+- Dream-1 was not run on this version of the scene and scoring. The demo scores 1.0.
 - The run prints `task_score` at the end. With `-E object_jitter=0` the layout is fixed and no seed is needed.
   Keep it at 0: jitter would move the nippers and the lead's pieces off their joints.
 - The demo. Left arm: over the lead, opens 2.4 cm, comes down so its pad tips sit 8 mm over the board, and closes on
   the lead's upper piece before the right arm has even reached the nippers. It holds there through the clip, then
-  lifts the offcut, carries it 7 cm over the cup, lowers it and lets go. Right arm: grips the nippers' two handle
-  plates 16.5 cm behind the jaws with a firm hold (3 mm in on each plate, about 15 N, under the 25 N detent, so the
+  lifts the offcut 7 cm, which puts it more than 10 cm from the board while it is held, carries it over the cup, lowers it and lets go (`CARRY_UP`). Right arm: grips the nippers' two handle
+  plates 16.5 cm behind the lead with a firm hold (3 mm in on each plate, about 15 N, under the 25 N detent, so the
   jaws stay open), carries them over the board with the feet 1.5 mm up, slides them 4 cm along the jaws so the lead
   enters the throat from the front, lowers them onto the board, squeezes fully (50 N, the blade closes on the lead and
   clips it), eases off so the jaws spring open, backs 6 cm along the jaws and lifts clear. Both wrists are turned 35
   degrees (the jaws' direction) and the right aim is trimmed 3.5 mm (`TRIM`, tuned from traces). The demo reads only
-  the fixed layout. The clip is at about step 235, the offcut is in the cup by step 357 and the demo ends on success
-  at step 377 (18.9 s at 20 Hz). A trial takes about 4 minutes on an L40S shared with other jobs, including startup.
+  the fixed layout. The demo ends on success at step 378 (18.9 s at 20 Hz), the offcut at rest in the cup and let go for the 1 s hold. A trial takes about 4 minutes on an L40S shared with other jobs, including startup.
 - The one-handed shortcut: the same demo with the left arm staying back (`HOLD_OFFCUT = False`) clips the lead and
   the offcut leaves the 10 cm and the trial scores 0 (run to the end, 0.0).
 - A high cut: the same demo with the nippers held 6 mm up (`CUT_HIGH = 0.006`) clips the lead at its 4 mm break point, with the offcut still caught and dropped in the cup, and scores 0.25.
@@ -149,4 +149,4 @@ is the environment the task runs in and is not part of it.
 (the left gripper and the right wrist link, at the clip), the closest finger points 8.8 cm. The lead's pieces peak at
 0.98 m/s when the offcut drops into the cup (a 5 cm fall) and their spin reads high while the pads pinch them (a
 2 mm stick of 1 g in a grip, steady in the frames). The nippers' halves peak at 0.1 m/s and 19 rad/s as the blade
-closes on the lead. Nothing falls off the table and nothing breaks that should not.
+closes on the lead. Nothing falls off the table and nothing breaks that should not. These readings were taken before the carry was raised from 6 to 7 cm (`CARRY_UP`). The clip and the drop into the cup are unchanged.

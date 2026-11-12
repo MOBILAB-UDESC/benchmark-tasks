@@ -563,7 +563,7 @@ def test_demo_high_cut_variant_holds_the_nippers_up(monkeypatch):
 
 
 def _cm(x: float) -> str:
-    return f"{x * 100:.1f}".rstrip("0").rstrip(".")
+    return f"{x * 100:.2f}".rstrip("0").rstrip(".")
 
 
 def test_task_json_and_readme_state_the_implemented_sizes_and_masses():
@@ -580,6 +580,14 @@ def test_task_json_and_readme_state_the_implemented_sizes_and_masses():
         assert grams(T.CUTTER.mass) in t and grams(T.JAW.mass) in t, name
         assert grams(T.CUTTER.mass + T.JAW.mass) in t, name
         assert "0.6 g" in t and "1.2 g" in t and (T.LEAD_LOW.mass, T.LEAD_TOP.mass) == (0.0006, 0.0012), name
-        for stale in ("10 x 7 x 0.16", "10 x 0.8 x 1.2", "17.2 cm long", "70 g", "(40 g)", "(30 g)", "14.2 cm"):
+        for stale in ("10 x 7 x 0.16", "10 x 0.8 x 1.2", "17.2 cm long", "70 g", "(40 g)", "14.2 cm"):
             assert stale not in t, (name, stale)
-    assert "CC-BY 4.0" in text["README.md"] and "consumable_cup_paper_a01" in text["README.md"]
+    assert "CC BY 4.0" in text["README.md"] and "consumable_cup_paper_a01" in text["README.md"]
+
+
+def test_demo_carries_the_held_offcut_past_10_cm():
+    # the offcut sits (top piece's centre) a fixed offset under the left TCP, so the carry's offcut position follows it
+    left = {w.label: np.asarray(w.pos) for w in T.demo()["left"]}
+    offset = TOP0[2] - left["hold the lead's top"][2]
+    over_cup = left["over the cup"] + (0.0, 0.0, offset)
+    assert np.linalg.norm(over_cup - T.BASE_POINT) > T.FLY_DIST + 0.005  # held and carried beyond 10 cm

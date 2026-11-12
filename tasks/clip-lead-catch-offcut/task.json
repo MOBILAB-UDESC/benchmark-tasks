@@ -16,6 +16,6 @@
   "run_limit": "1,200 steps (1 minute at 20 Hz)",
   "reset_notes": "Open the nippers (the red half out against its stop) and lay them on the mat where they started, rejoin the lead's three pieces on the board, and empty the cup.",
   "fidelity": "Rigid bodies, 240 Hz physics, 20 Hz control. Nippers: two rigid halves on a sliding joint (25 N detent, 1.5 N/mm spring). Lead: a fixed 2 mm stub and two pieces on joints that no force breaks. A clip is not simulated as cutting: the blade closing on the lead, read from the nippers' poses, frees one joint and gives the offcut a 3 m/s velocity. Lead and offcut are 2 mm and 1.8 g, heavier than real. Friction 1.2. Held means both pads in contact, read from PhysX.",
-  "scores": "Dream-1 was not run on this version. Demo: DEMO_PLACEHOLDER",
+  "scores": "Dream-1 was not run on this version of the scene and scoring. Demo: 1.0 (success at step 378, the left hand holds the offcut over 10 cm from the board and drops it in the cup)",
   "media": "M-ZYBG3A"
 }
