@@ -9,11 +9,13 @@ resistor, a capacitor, a pin header and a small chip, already soldered. On the r
 on a rest, pointing the same way as the board's components side faces.
 
 The task: press the LED flush against the board with one hand and touch the iron's tip to one of its pads for 2 s
-with the other, then put the iron back in its stand. The iron's tip must not touch the LED, the other parts' joints,
-the table or a gripper, and the LED must not come out of its holes.
+with the other, then put the iron back in its stand. The iron's tip must not come near the LED, the other parts'
+joints, the table or a gripper, and the LED must not come out of its holes. Holding and touching are real contact:
+the simulator's contact forces between a finger and the LED, and between the iron and the board (``contact.py``).
 
 ``bonds.py`` puts the LED on a sliding joint (its legs in their holes), ``compound.py`` builds the iron and the LED
-from several box colliders, ``fingers.py`` reads where the grippers' fingers are, and ``looks.py`` draws the parts.
+from several box colliders, ``contact.py`` reads the contact forces, ``fingers.py`` reads where the grippers' fingers
+are, and ``looks.py`` draws the parts.
 
 Run it:  inspect-robots run --embodiment yam_arena -E task=hold_led_solder_pad.py --scorer task_score ...
 """
@@ -29,6 +31,9 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import numpy as np  # noqa: E402
 from bonds import Sliding, on_reset, on_step, release, released  # noqa: E402
 from compound import compound  # noqa: E402
+from contact import partial as partial_contacts  # noqa: E402
+from contact import peaks as peak_forces  # noqa: E402
+from contact import take as take_contacts  # noqa: E402
 from looks import dress  # noqa: E402
 from yam_arena.demo import FINGER_CLOSED, FINGER_OPEN, Waypoint  # noqa: E402
 from yam_arena.task_file import TABLE_TOP, Box  # noqa: E402
@@ -75,7 +80,7 @@ HOLDER = [
 # One box spans the LED's body (5.8 mm flange, 8.6 mm tall) and its two legs (4.6 mm past the body's back). Only the
 # body collides (compound.py), so the legs pass through the board. A sliding joint along N (bonds.py) is the legs in
 # their holes: the LED moves in and out freely (a little friction), from flush against the board to 12 mm out, and a
-# knock of 8 N or 0.05 N m breaks it loose.
+# knock of 40 N or 1 N m breaks it loose.
 LED_U, LED_Z = -0.015, BOARD_Z + 0.015  # where its axis meets the board
 LED_BODY = (0.0058, 0.0086, 0.0058)
 LED_LEGS = 0.0046  # m of leg behind the body: 3 mm out of the solder side when the LED is flush
@@ -84,10 +89,12 @@ LED_GAP = 0.003  # m: how far it has slid out at the start
 FLUSH_N = BOARD_T / 2 + LED_BODY[1] - LED_LEN / 2  # the box's centre along N when the LED is flush
 BODY_DN = LED_LEN / 2 - LED_BODY[1] / 2  # the body's centre, from the box's centre, along its own +y
 LED_OUT = 0.010  # m out from flush: the legs have left their holes
+LED_HOLD = 40.0  # N: a knock this hard breaks the legs out of their holes
+LED_TWIST = 1.0  # N m: a twist this hard does
 LED = compound(Sliding(
     "led", pos=(*at(BOARD_XY, LED_U, FLUSH_N + LED_GAP), LED_Z), size=(LED_BODY[0], LED_LEN, LED_BODY[2]), yaw=TURN,
     mass=0.005, color=(0.85, 0.05, 0.04), axis="Y", lower=-(LED_GAP + 0.0005), upper=0.012 - LED_GAP, rate=0.0,
-    damping=0.2, hold=8.0, twist=0.05,
+    damping=0.2, hold=LED_HOLD, twist=LED_TWIST,
 ), [("body", (0.0, BODY_DN, 0.0), LED_BODY)])
 
 PAD_PITCH = 0.00254
@@ -164,20 +171,20 @@ LOOKS = {"board": "board.usdc", "led": "led.usdc", "iron": "iron.usdc", "holder_
 dress(LOOKS, hide=[b.name for b in (*HOLDER[1:], *STAND[1:])])
 
 # -- scoring ---------------------------------------------------------------------------------------------------------
-PAD_REACH = 0.002  # m: the tip's point this close to a pad's centre touches it
+PAD_REACH = 0.002  # m: where on the board the iron touches: the tip's point this close to a pad's centre is on it
 FLUSH_TOL = 0.001  # m: the LED this close to flush is flush
-HELD_REACH = 0.004  # m: a finger this close to the LED's body is on it (the finger meshes' points are 2 mm apart)
 SOLDER_S = 2.0  # s of contact without a break
-LED_TOUCH = 0.002  # m: the tip this close to the LED's body (on the components side) touched it
+LED_CLEAR = 0.002  # m: the tip's point must stay this far from the LED's body (on the components side)
 ZONE = 0.01  # m: the no-touch zone round the other parts' joints and bodies
-TABLE_TOUCH = 0.002  # m: the tip's point this close to the table touched it
-FINGER_TOUCH = 0.003  # m: the tip's point this close to a finger touched it
+TABLE_CLEAR = 0.002  # m: the tip's point must stay this far above the table top
+FINGER_CLEAR = 0.003  # m: the tip's point must stay this far from a gripper finger
 OFF_AXIS = 0.002  # m: the LED this far off its holes' axis has come out
 HANDLE_REST = np.array([0.0, sum(REST_Y) / 2, -HANDLE[2] / 2])  # the handle's underside over the rest (iron frame)
 REST_REACH = 0.015
 
 # What the episode remembers: how long the contact has lasted without a break, whether it ever happened, whether it
-# reached 2 s (soldered), and why the trial failed.
+# reached 2 s (soldered), and why the trial failed. Contact is the simulator's: a finger pressing the LED and the iron
+# pressing the board each carry a contact force of at least contact.F_MIN in some physics substep of a control step.
 STATE = {"contact_s": 0.0, "touched": False, "soldered": False, "failed": ""}
 
 
@@ -232,43 +239,45 @@ def _led_body(objects):
     return np.asarray(led.pos) + rot @ np.array([0.0, BODY_DN, 0.0]), np.array(LED_BODY) / 2, rot
 
 
-def led_held(objects, fingers) -> bool:
-    """A gripper finger within 4 mm of the LED's body."""
-    if fingers is None or len(fingers) == 0:
-        return False
-    return bool(_box_distance(fingers, *_led_body(objects)).min() < HELD_REACH)
-
-
-def on_pad(objects) -> bool:
-    """The tip's point within 2 mm of either of the LED's pads' centres."""
+def at_pad(objects) -> bool:
+    """The tip's point within 2 mm of either of the LED's pads' centres: where on the board the iron is."""
     return bool(np.linalg.norm(PADS - tip(objects), axis=1).min() < PAD_REACH)
 
 
+def on_pad(objects, board_touch: bool) -> bool:
+    """The iron touches a pad: its tip's point within 2 mm of a pad's centre and the iron in contact with the board
+    (a contact force from the simulator), not just near it."""
+    return bool(board_touch and at_pad(objects))
+
+
 def hazard(objects, fingers=None) -> str:
-    """Why the trial fails now, or "": the tip on the LED, in the no-touch zone, on the table or a finger, or the LED
-    out of its holes."""
+    """Why the trial fails now, or "": the tip within reach of the LED, in the no-touch zone, at the table or a
+    finger, or the LED out of its holes. These are clearances for a hot tool, not contacts: coming this near fails."""
     if led_fell(objects):
         return "the LED came out of its holes"
     t = tip(objects)
-    if board_coords(t)[1] > 0 and _box_distance(t, *_led_body(objects))[0] < LED_TOUCH:
-        return "the tip touched the LED"
+    if board_coords(t)[1] > 0 and _box_distance(t, *_led_body(objects))[0] < LED_CLEAR:
+        return "the tip came near the LED"
     if np.linalg.norm(JOINTS - t, axis=1).min() < ZONE or min(_box_distance(t, c, h)[0] for c, h in BODIES) < ZONE:
         return "the tip entered the no-touch zone"
-    if t[2] < TOP + TABLE_TOUCH:
-        return "the tip touched the table"
-    if fingers is not None and len(fingers) and np.linalg.norm(np.asarray(fingers) - t, axis=1).min() < FINGER_TOUCH:
-        return "the tip touched a gripper"
+    if t[2] < TOP + TABLE_CLEAR:
+        return "the tip came near the table"
+    if fingers is not None and len(fingers) and np.linalg.norm(np.asarray(fingers) - t, axis=1).min() < FINGER_CLEAR:
+        return "the tip came near a gripper"
     return ""
 
 
-def observe(objects, fingers=None, dt: float = 0.05) -> None:
-    """One control step of the episode's memory: the failure rules, and the 2 s contact timer."""
+def observe(objects, fingers=None, dt: float = 0.05, touch=(False, False)) -> None:
+    """One control step of the episode's memory: the failure rules, and the 2 s contact timer. ``fingers`` are points
+    on the fingers (for the clearance rule), ``touch`` is (a finger on the LED, the iron on the board): the
+    simulator's contact over the control step (contact.take)."""
     if STATE["failed"] or not _finite(objects):
         return
     STATE["failed"] = hazard(objects, fingers)
     if STATE["failed"] or STATE["soldered"]:
         return
-    contact = on_pad(objects) and abs(led_out(objects)) <= FLUSH_TOL and led_held(objects, fingers)
+    finger_on_led, iron_on_board = touch
+    contact = bool(finger_on_led and on_pad(objects, iron_on_board) and abs(led_out(objects)) <= FLUSH_TOL)
     STATE["contact_s"] = STATE["contact_s"] + dt if contact else 0.0
     STATE["touched"] = STATE["touched"] or contact
     if STATE["contact_s"] >= SOLDER_S - 1e-6:
@@ -277,15 +286,28 @@ def observe(objects, fingers=None, dt: float = 0.05) -> None:
 
 @on_step
 def watch(env) -> None:
-    """Every control step: where the LED, the iron and the fingers are, into the episode's memory. An LED pulled 10 mm
-    out has left its holes: its joint lets go and it drops."""
+    """Every control step: where the LED, the iron and the fingers are, and what touched what, into the episode's
+    memory. An LED pulled 10 mm out has left its holes: its joint lets go and it drops."""
     from fingers import finger_points
     from yam_arena.scene import object_states
 
     objects = object_states(env, ["led", "iron"])
     if _finite(objects) and led_out(objects) >= LED_OUT and not released("led"):
         release("led")
-    observe(objects, finger_points(env), float(env.unwrapped.step_dt))
+    subs, led_hits, board_hits = partial_contacts()
+    led_peak, board_peak = peak_forces()
+    touch = take_contacts()
+    was_failed = STATE["failed"]
+    observe(objects, finger_points(env), float(env.unwrapped.step_dt), touch)
+    if STATE["failed"] and not was_failed:
+        b = board_coords(objects["led"].pos)
+        turned = math.degrees(math.acos(np.clip(_rot(objects["led"])[:, 1] @ N, -1.0, 1.0)))
+        print(f"[contact] FAILED: {STATE['failed']} (LED {1000 * led_out(objects):.2f} mm out of flush, "
+              f"{1000 * (b[0] - LED_U):.2f} mm along the board, {1000 * (b[2] + BOARD_Z - LED_Z):.2f} mm up, "
+              f"turned {turned:.1f} degrees)", flush=True)
+    if led_peak > 0 or board_peak > 0:
+        print(f"[contact] {subs} substeps: finger on LED {led_hits}, iron on board {board_hits} "
+              f"(peaks {led_peak:.2f} N, {board_peak:.2f} N), soldering {STATE['contact_s']:.2f} s", flush=True)
 
 
 def in_stand(objects) -> bool:
@@ -331,7 +353,7 @@ YAW_TRIM = math.radians(-4.0)  # the right wrist lags 4 degrees about the vertic
 L_YAW, R_YAW = TURN, TURN + math.pi / 2 + YAW_TRIM
 HOLD_LED = True  # False: the left arm stays back (the one-handed shortcut, which scores 0)
 FACE_OFF = 0.006  # m: the TCP behind the right finger's outer face, at the LED's top edge
-PRESS_L = 0.002  # m: the TCP is sent this far past where the face meets the flush LED
+PRESS_L = 0.004  # m: the TCP is sent this far past where the face meets the flush LED
 LED_END_N = BOARD_T / 2 + LED_BODY[1]  # the LED's end, flush
 L_Z = LED_Z + 0.006
 L_PRESS_N = LED_END_N + FACE_OFF - PRESS_L

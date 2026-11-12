@@ -1,13 +1,15 @@
 """Offline checks (no GPU): the task file loads, the layout (the LED on its joint, the iron in its stand, the arms in
-their halves), every scoring outcome, the 2 s contact timer and the episode's memory, the failure rules (the tip on
-the LED, in the no-touch zone, on the table or a finger, the LED out of its holes), the one-handed shortcut, and the
-demo's order and reach. Run in the yam_arena environment: python -m pytest -q test_hold_led_solder_pad.py"""
+their halves), every scoring outcome, the 2 s contact timer and the episode's memory, the contact rule (a hovering
+finger or tip scores nothing: only the simulator's contact force counts), the clearance rules (the tip near the LED,
+in the no-touch zone, at the table or a finger, the LED out of its holes), the one-handed shortcut, and the demo's
+order and reach. Run in the yam_arena environment: python -m pytest -q test_hold_led_solder_pad.py"""
 
 from __future__ import annotations
 
 import math
 import pathlib
 
+import contact
 import numpy as np
 import pytest
 from yam_arena.demo import ArmPlan
@@ -58,10 +60,15 @@ def _finger_on_led(led_pos=LED_FLUSH):
     return np.array([end + 0.0005 * T.N, end + 0.05 * T.N + (0, 0, 0.05)])
 
 
-def _contact(steps=STEPS_2S, offset=(0.0, 0.0, 0.0), led=LED_FLUSH, fingers="on"):
+BOTH = (True, True)  # the simulator's contact: a finger on the LED, the iron on the board
+
+
+def _contact(steps=STEPS_2S, offset=(0.0, 0.0, 0.0), led=LED_FLUSH, fingers="on", touch=BOTH, pad=0):
+    """``steps`` control steps with the tip near pad ``pad`` (+ ``offset``), the LED at ``led`` and the simulator
+    reporting ``touch``. ``fingers`` are the finger points near the LED (they do not count as holding it)."""
     f = _finger_on_led(led) if isinstance(fingers, str) else fingers
     for _ in range(steps):
-        T.observe(_scene(led=led, iron=_iron_tip_at(T.PADS[0], offset)), f, DT)
+        T.observe(_scene(led=led, iron=_iron_tip_at(T.PADS[pad], offset)), f, DT, touch)
 
 
 IN_STAND = _scene()
@@ -167,8 +174,7 @@ def test_contact_must_be_continuous():
 
 
 def test_either_pad():
-    for _ in range(STEPS_2S):
-        T.observe(_scene(led=LED_FLUSH, iron=_iron_tip_at(T.PADS[1])), _finger_on_led(), DT)
+    _contact(pad=1)
     assert T.STATE["soldered"]
 
 
@@ -194,32 +200,102 @@ def test_led_not_flush_does_not_count():
 
 def test_one_handed_shortcut_scores_zero():
     """The tip on the pad with the LED still slid out, or pushed flush and let go."""
-    _contact(led=LED0, fingers=None)
+    _contact(led=LED0, fingers=None, touch=(False, True))
     assert T.score(_scene()) == 0.0 and not T.STATE["failed"]
     T.reset_memory()
-    _contact(led=LED_FLUSH, fingers=None)
+    _contact(led=LED_FLUSH, fingers=None, touch=(False, True))
+    assert T.score(_scene(led=LED_FLUSH)) == 0.0
+    T.reset_memory()
+    _contact(led=LED0, fingers=None, touch=BOTH)  # a finger on the LED but the LED still slid out: not flush
+    assert T.score(_scene()) == 0.0
+
+
+# -- contact, not proximity: the reviewers' exploits -------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("gap", [0.0, 0.0005, 0.002, 0.0039])
+def test_hovering_finger_does_not_hold(gap):
+    """A finger within 4 mm of the flush LED, the iron on the pad, but the simulator reports no contact on the LED."""
+    near = _finger_on_led() + gap * T.N
+    _contact(fingers=near, touch=(False, True))
+    assert not T.STATE["touched"] and not T.STATE["soldered"] and T.STATE["contact_s"] == 0.0
     assert T.score(_scene(led=LED_FLUSH)) == 0.0
 
 
-def test_finger_must_be_on_the_led():
-    near = _finger_on_led() + 0.0034 * T.N  # 3.9 mm off the end face
-    _contact(fingers=near)
-    assert T.STATE["soldered"]
-    T.reset_memory()
-    _contact(fingers=_finger_on_led() + 0.004 * T.N)  # 4.5 mm off
+@pytest.mark.parametrize("gap", [0.0, 0.0005, 0.001, 0.0019])
+def test_hovering_tip_does_not_touch(gap):
+    """The tip's point within 2 mm of a pad's centre (hovering ``gap`` off the board's solder face), the LED held, but no contact
+    between the iron and the board."""
+    _contact(offset=tuple(-gap * T.N), touch=(True, False))
+    assert not T.STATE["touched"] and not T.STATE["soldered"] and T.STATE["contact_s"] == 0.0
+    assert T.score(_scene(led=LED_FLUSH)) == 0.0
+
+
+def test_hovering_finger_and_tip_never_reach_full_credit():
+    """Both hover, for the whole 1,200-step trial: nothing, not even the 0.25."""
+    _contact(1200, touch=(False, False))
+    assert T.score(_scene(led=LED_FLUSH)) == 0.0 and not T.success(_scene(led=LED_FLUSH))
+
+
+def test_contact_elsewhere_does_not_solder():
+    """The iron pressed on the board far from a pad (the tip 6 mm along the board from the pad), the LED held."""
+    _contact(offset=tuple(-0.006 * T.U))
     assert not T.STATE["touched"]
+
+
+def test_contact_flicker_breaks_the_hold():
+    """The finger's contact lost for one control step restarts the 2 s."""
+    _contact(STEPS_2S - 2)
+    _contact(1, touch=(False, True))
+    assert T.STATE["contact_s"] == 0.0
+    _contact(STEPS_2S - 1)
+    assert not T.STATE["soldered"]
+    _contact(1)
+    assert T.STATE["soldered"]
+
+
+def test_pad_contact_lost_for_one_step_breaks_the_hold():
+    _contact(STEPS_2S - 2)
+    _contact(1, touch=(True, False))
+    assert T.STATE["contact_s"] == 0.0
+    _contact(STEPS_2S - 1)
+    assert not T.STATE["soldered"]
+
+
+def test_touch_defaults_to_no_contact():
+    """No contact report at all (the hook missing) never scores."""
+    for _ in range(STEPS_2S):
+        T.observe(_scene(led=LED_FLUSH, iron=_iron_tip_at(T.PADS[0])), _finger_on_led(), DT)
+    assert not T.STATE["touched"]
+
+
+# -- the contact reader (contact.py) -----------------------------------------------------------------------------------
+
+
+def test_contact_needs_a_force():
+    assert contact.reduce_contacts([0.0, 0.05], [2]) == (False, pytest.approx(0.05))
+    assert contact.reduce_contacts([0.0, 0.3], [2]) == (True, pytest.approx(0.3))
+    assert contact.reduce_contacts([], [0]) == (False, 0.0)
+    assert contact.reduce_contacts([[0.0, 0.0, 0.5]], [1]) == (True, pytest.approx(0.5))  # a force vector
+
+
+def test_control_step_needs_a_substep_with_force():
+    assert contact.step_touched(12, 12)
+    assert contact.step_touched(12, 2)  # a held iron bounces: its force is there in some substeps only
+    assert not contact.step_touched(12, 0)  # hovering: no force in any substep
+    assert not contact.step_touched(0, 0)
 
 
 def test_soldering_is_remembered():
     _contact()
-    T.observe(_scene(led=LED_FLUSH), None, DT)
+    T.observe(_scene(led=LED_FLUSH), None, DT, (False, False))
     assert T.STATE["soldered"] and T.score(_scene(led=LED_FLUSH)) == 1.0
 
 
-def test_tip_on_the_led_fails():
+def test_tip_near_the_led_fails():
     end = LED_FLUSH + (T.LED_LEN / 2) * T.N
     T.observe(_scene(led=LED_FLUSH, iron=_iron_tip_at(end + 0.001 * T.N)), None, DT)
-    assert T.STATE["failed"] == "the tip touched the LED"
+    assert T.STATE["failed"] == "the tip came near the LED"
     _contact()
     assert T.score(_scene(led=LED_FLUSH)) == 0.0
 
@@ -245,13 +321,13 @@ def test_just_outside_the_zone():
 
 def test_tip_on_the_table_fails():
     p = np.array([0.2, -0.2, T.TOP + 0.001])
-    assert T.score(_scene(iron=_iron_tip_at(p))) == 0.0 and T.STATE["failed"] == "the tip touched the table"
+    assert T.score(_scene(iron=_iron_tip_at(p))) == 0.0 and T.STATE["failed"] == "the tip came near the table"
 
 
 def test_tip_on_a_finger_fails():
     t = T.tip(_scene())
     T.observe(_scene(), np.array([t + (0.002, 0.0, 0.0)]), DT)
-    assert T.STATE["failed"] == "the tip touched a gripper"
+    assert T.STATE["failed"] == "the tip came near a gripper"
 
 
 def test_gripping_the_handle_is_fine():
