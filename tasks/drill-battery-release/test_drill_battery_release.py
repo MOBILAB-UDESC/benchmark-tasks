@@ -29,6 +29,15 @@ def _quat_z(angle, q=UNTURNED):
     return (c * x - s * y, c * y + s * x, c * z + s * w, c * w - s * z)
 
 
+def _quat_from_matrix(m):
+    """x, y, z, w of a rotation matrix."""
+    w = math.sqrt(max(1.0 + m[0, 0] + m[1, 1] + m[2, 2], 0.0)) / 2
+    if w > 0.1:
+        return ((m[2, 1] - m[1, 2]) / (4 * w), (m[0, 2] - m[2, 0]) / (4 * w), (m[1, 0] - m[0, 1]) / (4 * w), w)
+    x = math.sqrt(max(1.0 + m[0, 0] - m[1, 1] - m[2, 2], 0.0)) / 2  # a half turn about an axis: use the largest
+    return (x, (m[0, 1] + m[1, 0]) / (4 * x), (m[0, 2] + m[2, 0]) / (4 * x), (m[2, 1] - m[1, 2]) / (4 * x))
+
+
 def _state(pos, quat=UNTURNED, vel=(0.0, 0.0, 0.0)):
     pos = np.asarray(pos, float)
     return ObjectState(pos=pos, quat_xyzw=np.asarray(quat, float), lin_vel=np.asarray(vel, float),
@@ -49,7 +58,12 @@ def _scene(pack=None, drill=None, pressed=(0.0, 0.0), pack_quat=UNTURNED):
 
 SQUEEZE = (0.003, 0.003)
 OUT = np.array([-1.0, 0.0, 0.0])
-IN_TRAY = (*T.TRAY_XY, T.TRAY_FLOOR_Z + T.BATTERY_SIZE[2] / 2)
+IN_TRAY = (*T.TRAY_XY, T.TRAY_FLOOR_Z + T.BATTERY_SIZE[2] / 2)  # lying flat on the tray's floor, in its middle
+
+
+def _let_go(released=True):
+    """What the step hook records: no finger within 3 mm of the pack."""
+    T.STATE["released"] = released
 
 
 @pytest.fixture(autouse=True)
@@ -155,18 +169,21 @@ def test_in_tray_succeeds():
     for quat in (UNTURNED, _quat_z(1.2)):
         T.reset_memory()
         T.score(_scene(pressed=SQUEEZE))
+        _let_go()
         objects = _scene(IN_TRAY, pack_quat=quat)
         assert T.success(objects) and T.score(objects) == 1.0
 
 
 def test_in_tray_without_a_squeeze_zero():
     """Can't happen with the lock, but the scorer asks for the squeeze before any credit."""
+    _let_go()
     objects = _scene(IN_TRAY)
     assert T.score(objects) == 0.0 and not T.success(objects)
 
 
 def test_in_tray_still_moving_half():
     T.score(_scene(pressed=SQUEEZE))
+    _let_go()
     objects = _scene(_state(IN_TRAY, vel=(0.05, 0.0, 0.0)))
     assert not T.success(objects) and T.score(objects) == 0.5
 
@@ -174,10 +191,118 @@ def test_in_tray_still_moving_half():
 def test_held_above_the_tray_half():
     T.score(_scene(pressed=SQUEEZE))
     assert T.score(_scene((*T.TRAY_XY, T.TRAY_FLOOR_Z + 0.10))) == 0.5
+    _let_go()
+    assert T.score(_scene((*T.TRAY_XY, T.TRAY_FLOOR_Z + 0.10))) == 0.5
+
+
+def test_still_above_the_floor_is_not_full_credit():
+    """The reviewers' exploit: a pack held still in the tray, off the floor, with or without the fingers on it."""
+    T.score(_scene(pressed=SQUEEZE))
+    for lift in (0.003, 0.01, 0.03, 0.06):
+        for released in (False, True):
+            _let_go(released)
+            objects = _scene((*IN_TRAY[:2], IN_TRAY[2] + lift))
+            assert objects["battery"].resting()
+            assert not T.success(objects) and T.score(objects) == 0.5, (lift, released)
+
+
+def test_in_tray_but_still_gripped_half():
+    """Down on the floor in the tray, but a finger still touching the pack: it is not placed yet."""
+    T.score(_scene(pressed=SQUEEZE))
+    _let_go(False)
+    objects = _scene(IN_TRAY)
+    assert not T.success(objects) and T.score(objects) == 0.5
+    _let_go(True)
+    assert T.success(objects) and T.score(objects) == 1.0
+
+
+def test_no_finger_check_yet_is_not_released():
+    """Before any step has run nothing counts as let go, so the offline default cannot score 1.0."""
+    T.score(_scene(pressed=SQUEEZE))
+    assert not T.STATE["released"]
+    assert T.score(_scene(IN_TRAY)) == 0.5
+
+
+def test_leaning_or_tilted_in_the_tray_half():
+    """Corner on the floor and the pack leaning on a wall: not resting on the floor."""
+    T.score(_scene(pressed=SQUEEZE))
+    _let_go()
+    tilt = np.array([[1.0, 0.0, 0.0], [0.0, math.cos(0.4), -math.sin(0.4)], [0.0, math.sin(0.4), math.cos(0.4)]])
+    q = _quat_from_matrix(tilt)
+    pack = _state(IN_TRAY, q)
+    z = T._pack_corners(pack)[:, 2].min()
+    pack = _state((IN_TRAY[0], IN_TRAY[1], IN_TRAY[2] + (T.TRAY_FLOOR_Z - z)), q)
+    objects = _scene(pack)
+    assert abs(T._pack_corners(pack)[:, 2].min() - T.TRAY_FLOOR_Z) < 1e-9  # a corner on the floor
+    assert not T.success(objects) and T.score(objects) == 0.5
+
+
+def test_on_its_side_in_the_tray_succeeds():
+    """A flat face down is resting whichever face it is: the pack on its 5 x 5.8 cm end."""
+    T.score(_scene(pressed=SQUEEZE))
+    _let_go()
+    quat = _quat_from_matrix(np.array([[0.0, 0.0, 1.0], [0.0, 1.0, 0.0], [-1.0, 0.0, 0.0]]))
+    pack = _state((*T.TRAY_XY, T.TRAY_FLOOR_Z + T.BATTERY_SIZE[0] / 2), quat)
+    assert T.success(_scene(pack))
+
+
+def test_on_a_wall_or_over_it_half():
+    """Straddling or beyond the tray's walls, or in the open next to the tray: not inside them."""
+    T.score(_scene(pressed=SQUEEZE))
+    _let_go()
+    wall_x = T.TRAY_XY[0] + T.TRAY_OUTER[0] / 2 - T.TRAY_WALL
+    on_wall = _scene((wall_x - 0.02, T.TRAY_XY[1], T.TRAY_FLOOR_Z + T.BATTERY_SIZE[2] / 2))  # pack 5 cm along x
+    assert not T.success(on_wall) and T.score(on_wall) == 0.5
+    beside = _scene((T.TRAY_XY[0], T.TRAY_XY[1] + 0.12, T.TOP + T.BATTERY_SIZE[2] / 2))
+    assert not T.success(beside) and T.score(beside) == 0.5
+    edge = wall_x - T.BATTERY_SIZE[0] / 2  # the pack's far end just touching the inner face of the wall
+    snug = _scene((edge - 0.0005, T.TRAY_XY[1], IN_TRAY[2]))
+    assert T.success(snug)
+    over = _scene((edge + 0.004, T.TRAY_XY[1], IN_TRAY[2]))
+    assert not T.success(over)
+
+
+def test_finger_gap():
+    pack = _scene()["battery"]
+    half_y = T.BATTERY_SIZE[1] / 2 + T.BUTTON_SIZE[1]
+    on_button = pack.pos + (0.0, half_y, 0.0)
+    inside = pack.pos + (0.01, 0.0, 0.0)
+    near = pack.pos + (0.0, half_y + 0.0025, 0.0)
+    clear = pack.pos + (0.0, half_y + 0.009, 0.0)
+    objects = _scene()
+    assert T.finger_gap(objects, [on_button]) == pytest.approx(0.0, abs=1e-9)
+    assert T.finger_gap(objects, [inside]) == 0.0
+    assert T.finger_gap(objects, [clear, near]) == pytest.approx(0.0025)
+    assert T.finger_gap(objects, [clear]) == pytest.approx(0.009)
+    assert T.finger_gap(objects, []) == math.inf and T.finger_gap(objects, None) == math.inf
+    assert 0.0025 < T.RELEASED_GAP < 0.009
+
+
+def test_step_hook_records_release(monkeypatch):
+    """work_the_lock sets ``released`` from the finger points every step."""
+    import sys
+    import types
+
+    import fingers
+
+    objects = _scene()
+    far = objects["battery"].pos + (0.0, 0.2, 0.0)
+    touching = objects["battery"].pos + (0.0, T.BATTERY_SIZE[1] / 2 + T.BUTTON_SIZE[1], 0.0)
+    # yam_arena.scene needs the simulator to import: stand in for it with the one function the hook uses
+    monkeypatch.setitem(sys.modules, "yam_arena.scene", types.SimpleNamespace(object_states=lambda env, n: objects))
+    monkeypatch.setattr(T, "joint_enabled", lambda *a: True)
+    monkeypatch.setattr(T, "set_joint", lambda *a: None)
+    for points, expected in (([far], True), ([far, touching], False), ([far], True)):
+        monkeypatch.setattr(fingers, "finger_points", lambda env, points=points: np.asarray(points))
+        T.work_the_lock(None)
+        assert T.STATE["released"] is expected
+    T.reset_memory()
+    assert T.STATE["released"] is False
 
 
 def test_in_tray_but_drill_moved_half():
     T.score(_scene(pressed=SQUEEZE))
+    _let_go()
     moved = _scene(IN_TRAY, drill=DRILL0 + (0.0, -0.11, 0.0))
     assert not T.success(moved) and T.score(moved) == 0.5
     kept = _scene(IN_TRAY, drill=DRILL0 + (0.0, -0.09, 0.0))

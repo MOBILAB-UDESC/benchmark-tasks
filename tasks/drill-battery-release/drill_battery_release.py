@@ -148,8 +148,9 @@ dress(LOOKS, hide=[b.name for b in TRAY[1:]])
 MOVED = 0.01  # m slid along the handle: the pack has started to come off
 SEPARATED = 0.05  # m from its seat on the foot: the pack is off the drill
 DRILL_KEPT = 0.10  # m: the drill's centre must stay within this of its start (in the plane of the table)
-IN_TRAY_XY = (0.08, 0.055)  # m: the pack's centre within this of the tray's centre is over its 18.4 x 13.4 cm floor
-IN_TRAY_Z = 0.06  # m above the tray floor: lower than this, the pack lies in the tray
+INNER_HALF = (TRAY_OUTER[0] / 2 - TRAY_WALL, TRAY_OUTER[1] / 2 - TRAY_WALL)  # m: the tray's 18.4 x 13.4 cm floor
+FLOOR_TOUCH = 0.0015  # m: the pack's four lowest corners this close to the floor (or less) lie on it
+RELEASED_GAP = 0.003  # m: every gripper finger at least this far from the pack and its buttons: let go
 OFF_TABLE_Z = -0.02  # m above the table: an object whose centre is lower has fallen off the table
 RELATCH = 0.002  # m: buttons let go within this of the seat, the lock clicks back
 
@@ -158,13 +159,14 @@ RELATCH = 0.002  # m: buttons let go within this of the seat, the lock clicks ba
 _drill_centre = on_drill((np.asarray(DRILL_LOW) + np.asarray(DRILL_HIGH)) / 2)
 START = {"drill": np.asarray(_drill_centre), "drill_quat": np.asarray(DRILL_QUAT), "battery": np.asarray(BATTERY_START)}
 
-# What the episode remembers: both buttons were pressed together at some step, and the pack has slid off its foot.
-STATE = {"squeezed": False, "off": False}
+# What the episode remembers: both buttons were pressed together at some step, the pack has slid off its foot, and
+# whether every finger was clear of the pack at the last step (from on_step: nothing is clear until a step has run).
+STATE = {"squeezed": False, "off": False, "released": False}
 
 
 @on_reset
 def reset_memory(env=None) -> None:
-    STATE["squeezed"] = STATE["off"] = False
+    STATE["squeezed"] = STATE["off"] = STATE["released"] = False
     if env is not None:
         from yam_arena.scene import object_states
 
@@ -223,11 +225,30 @@ def drill_moved(objects) -> float:
     return float(np.linalg.norm((objects["drill"].pos - START["drill"])[:2]))
 
 
+def _pack_corners(pack) -> np.ndarray:
+    """The pack's eight corners (8, 3), from its pose and its 7 x 5 x 5.8 cm size."""
+    signs = np.array([[x, y, z] for x in (-1, 1) for y in (-1, 1) for z in (-1, 1)], float)
+    return pack.pos + (signs * np.asarray(BATTERY_SIZE) / 2) @ _matrix(pack.quat_xyzw).T
+
+
 def in_tray(objects) -> bool:
-    """The pack's centre within 8 x 5.5 cm of the tray's centre and less than 6 cm above its floor."""
-    c = objects["battery"].pos
-    return bool(abs(c[0] - TRAY_XY[0]) < IN_TRAY_XY[0] and abs(c[1] - TRAY_XY[1]) < IN_TRAY_XY[1]
-                and c[2] < TRAY_FLOOR_Z + IN_TRAY_Z)
+    """The pack lies on the tray's floor, inside its walls: all eight corners within the inner 18.4 x 13.4 cm of the
+    walls, and the four lowest corners within 1.5 mm of the floor (a flat face down, not leaning or held up)."""
+    corners = _pack_corners(objects["battery"])
+    inside = np.all(np.abs(corners[:, :2] - np.asarray(TRAY_XY)) <= np.asarray(INNER_HALF))
+    height = np.sort(corners[:, 2]) - TRAY_FLOOR_Z
+    return bool(inside and height[0] >= -FLOOR_TOUCH and height[3] <= FLOOR_TOUCH)
+
+
+def finger_gap(objects, fingers) -> float:
+    """The closest any finger point comes to the pack with its buttons (m): 0 inside or touching it. ``fingers`` is
+    (n, 3) points on the grippers' finger meshes, from ``fingers.py``."""
+    if fingers is None or len(fingers) == 0:
+        return math.inf
+    pack = objects["battery"]
+    half = np.array([BATTERY_SIZE[0], BATTERY_SIZE[1] + 2 * BUTTON_SIZE[1], BATTERY_SIZE[2]]) / 2
+    local = (np.asarray(fingers, float) - pack.pos) @ _matrix(pack.quat_xyzw)
+    return float(np.min(np.linalg.norm(np.maximum(np.abs(local) - half, 0.0), axis=1)))
 
 
 def _violation(objects) -> bool:
@@ -244,12 +265,15 @@ def _remember(objects) -> None:
 @on_step
 def work_the_lock(env) -> None:
     """The lock lets go while both buttons are pressed and clicks back when they are let go near the seat. Slid
-    4 cm, the pack leaves the foot: its slide is switched off for the rest of the episode."""
+    4 cm, the pack leaves the foot: its slide is switched off for the rest of the episode. Every step the fingers
+    are checked against the pack: let go when none is within 3 mm of it."""
+    from fingers import finger_points
     from yam_arena.scene import object_states
 
     objects = object_states(env, ["drill", "battery", *BUTTON_NAMES])
     if not _finite(objects):
         return
+    STATE["released"] = finger_gap(objects, finger_points(env)) >= RELEASED_GAP
     _remember(objects)
     if STATE["off"]:
         return
@@ -265,11 +289,13 @@ def work_the_lock(env) -> None:
 
 
 def _done(objects) -> bool:
-    return bool(separation(objects) >= SEPARATED and in_tray(objects) and objects["battery"].resting())
+    return bool(separation(objects) >= SEPARATED and in_tray(objects) and STATE["released"]
+                and objects["battery"].resting())
 
 
 def success(objects) -> bool:
-    """The pack lies still in the tray, off the drill, and the drill is within 10 cm of its start."""
+    """The pack is off the drill, let go by every finger, lies still on the tray's floor inside its walls, and the
+    drill is within 10 cm of its start."""
     if _violation(objects):
         return False
     _remember(objects)
@@ -277,8 +303,8 @@ def success(objects) -> bool:
 
 
 def score(objects) -> float:
-    """1.0: success. 0.5: the pack is off the drill (5 cm or more from its seat) but not lying still in the tray, or
-    it is in the tray but the drill moved 10 cm or more. 0.25: both buttons have been pressed together at some step
+    """1.0: success. 0.5: the pack is off the drill (5 cm or more from its seat) but not placed (held, in the air,
+    on the table, leaning, or still moving), or it is placed but the drill moved 10 cm or more. 0.25: both buttons have been pressed together at some step
     and the pack has slid 1 cm or more along the handle. 0 otherwise, and 0 if the drill or the pack fell off the
     table."""
     if _violation(objects):

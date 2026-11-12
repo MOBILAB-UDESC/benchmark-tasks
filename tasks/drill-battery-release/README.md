@@ -11,10 +11,11 @@ pack goes in a tray.
 |---|---|
 | `drill_battery_release.py` | The `yam_arena` task file: scene, scoring (`success`, `score`), the lock's step hook and the scripted `demo()` |
 | `bonds.py` | `Slotted`: a box that slides on another object against a set friction, with a lock that can be switched off and on. `Sliding`: a box on a sprung prismatic joint (the buttons) |
+| `fingers.py` | Where the grippers' fingers are: points on their collision meshes, from the robot's `tip_left` and `tip_right` bodies, for the "let go" check |
 | `simready.py` | Loads the NVIDIA SimReady drill (pinned revision), makes its five bodies one, and removes its moulded-on battery |
 | `looks.py` | Puts a detailed mesh on a box at spawn and hides the plain box, which still collides |
 | `looks/` | The meshes (`battery.usdc`, `tray.usdc`) and `make_looks.py`, the Blender script that models and exports them |
-| `test_drill_battery_release.py` | Offline checks: the file loads, the mechanism is specified, every scoring outcome, the demo's order, depths, arm spacing and reach (no GPU) |
+| `test_drill_battery_release.py` | Offline checks: the file loads, the mechanism is specified, every scoring outcome (and the pack held still above the tray's floor), the demo's order, depths, arm spacing and reach (no GPU) |
 | `task.json` | The task's details for the board |
 
 ## Assets
@@ -47,7 +48,7 @@ On the YAM Brev launchable, from this folder, with the Arena environment active
 (`source /data/IsaacLab-Arena/yam.env`):
 
 ```bash
-# Dream-1 (needs DREAM_API_KEY), 2,400 steps
+# Dream-1 (needs DREAM_API_KEY), 2,400 steps. Not run on this version of the scorer
 inspect-robots run --embodiment yam_arena --policy dream \
   -E task=drill_battery_release.py -E object_jitter=0 -E control_hz=20 -E cam_width=320 -E cam_height=176 \
   --instruction "Hold the drill with the right hand. With the left hand, squeeze both release buttons on the orange battery, slide the battery off the drill's handle and put it in the blue tray." \
@@ -69,7 +70,8 @@ inspect-robots run --embodiment yam_arena --policy yam_scripted \
   holds it. The left arm comes down over the pack with its fingers closing across it, which presses both buttons
   (2.4 to 2.6 mm in), pulls 7 cm along the handle toward the robot (the pack comes off its foot after 4 cm), lifts it,
   carries it to the tray, lowers it and lets go. The right arm lets go of the drill once the pack is up. It reaches 1.0
-  and ends on success at step 257 (12.9 s at 20 Hz). The drill moves about 2 mm. A trial takes about 90 s on an L40S,
+  and ends on success at step 258 (12.9 s at 20 Hz), with every finger at least 3 mm from the pack and the pack flat on
+  the tray's floor. The drill moves about 2 mm. A trial takes about 90 s on an L40S,
   including startup.
 - The same demo with the right arm staying up instead of holding the drill (`HOLD = False`) scores 0: the pack's
   friction on the handle drags the loose drill along, the left arm lifts the drill with the pack still on it and
@@ -88,17 +90,24 @@ taken with the drill as it now lies (the drill's start, moved and turned the way
   rest of the trial. Every score above 0 needs it.
 - **0** if the drill or the pack has fallen off the table (centre more than 2 cm below the top) or the state is not
   finite.
-- **1.0 (success, held 1 s):** the pack off the drill (its centre 5 cm or more from its seat), its centre within 8 cm
-  along x and 5.5 cm along y of the tray's centre (0.19, 0.25) and less than 6 cm above the tray floor (6 mm up), the
-  pack still (under 1 cm/s and 0.5 rad/s), and the drill's centre within 10 cm of its start in the plane of the table.
-- **0.5:** the pack off the drill but not lying still in the tray (held in the air, or set down anywhere else), or in
-  the tray with the drill moved 10 cm or more.
+- **Let go:** no point of any gripper finger within 3 mm of the pack or its buttons (the fingers are points on the
+  robot's finger collision meshes, `fingers.py`). It is measured every control step, and nothing counts as let go
+  before the first step.
+- **Placed:** the pack lies on the tray's floor inside its walls. All eight corners of the pack are within the tray's
+  inner walls (x within 9.2 cm and y within 6.7 cm of the tray's centre (0.19, 0.25)), and its four lowest corners are
+  within 1.5 mm of the floor (6 mm above the table top), so one flat face is down. A pack held up, leaning on a wall,
+  or resting on a wall's top is not placed.
+- **1.0 (success, held 1 s):** the pack off the drill (its centre 5 cm or more from its seat), let go, placed, and
+  still (under 1 cm/s and 0.5 rad/s), and the drill's centre within 10 cm of its start in the plane of the table.
+- **0.5:** the pack off the drill but not placed, let go and still (held in the hand, held in the air over the tray,
+  set down on the table, leaning, or still moving), or placed with the drill moved 10 cm or more.
 - **0.25:** the pack slid 1 cm or more along the handle, away from its seat, but still on the drill.
 - **0** otherwise, including doing nothing, squeezing without sliding, pulling the pack without squeezing (the lock
   holds), and dragging the drill along with its pack (the pack hasn't slid on the handle).
 
 In a real trial, a tape measure gives the pack's distance from the handle's foot and the drill's distance from its
-start, and a photo shows the pack in the tray. The squeeze is seen in the video (both buttons in at once).
+start, and a photo shows the pack lying flat on the tray's floor with nothing touching it (a 3 mm gap between each pad and
+the pack). The squeeze is seen in the video (both buttons in at once).
 
 ## Sizes
 
