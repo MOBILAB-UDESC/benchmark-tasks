@@ -10,8 +10,8 @@ leave them there.
 Each arm's three joints are dry-friction hinges (``bonds.Hinge``): a joint stays where it is under any torque below
 0.10 N m, turns against a constant 0.10 N m once pushed past it, and has no spring that brings it back. Moving the
 clip drags the two joints behind it. The wire is held in the clip by a bond that breaks at 2 N: pulled harder, the
-wire comes out and the trial scores 0. The left stand stands 8 mm higher than the right one, so the wires pass over
-each other without touching.
+wire comes out and the trial scores 0. The left stand stands 5 mm higher than the right one, exactly one wire
+diameter, so the two wires lie one on the other where they overlap, touching, as in a lap joint ready to solder.
 
 Run it:  inspect-robots run --embodiment yam_arena -E task=helping_hands_cross_wires.py --scorer task_score ...
 """
@@ -25,6 +25,7 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 import numpy as np  # noqa: E402
+import contact  # noqa: E402  (hooks Isaac Lab to read the contact between the two wires)
 from bonds import Bonded, Hinge, on_reset, on_step  # noqa: E402
 from looks import dress  # noqa: E402
 from yam_arena.constants import PAD_TIP_PAST_TCP  # noqa: E402
@@ -47,7 +48,7 @@ WIRE_MASS = 0.003
 WIRE_HOLD = 2.0  # N: the pull that takes a wire out of its clip
 CLIP_END = LINK[2]  # the wire starts at the clip's end face
 TIP = LINK[2] + WIRE_SIZE[0]  # from the third hinge to the wire's free end
-WIRE_PITCH = 0.008  # the left stand's arms stand this much higher than the right's
+WIRE_PITCH = WIRE_SIZE[2]  # the left stand's arms stand one wire diameter higher: the two wires touch where they cross
 LINK_Z = {"right": TOP + 0.045, "left": TOP + 0.045 + WIRE_PITCH}  # the links' centres
 PLINTH_SIZE = (0.08, 0.08)
 PLINTH_H = {"right": 0.030, "left": 0.030 + WIRE_PITCH}  # the base tops sit 3 mm under the first link
@@ -60,7 +61,7 @@ JOINT_RANGE = math.radians(150)  # each hinge turns this far either way from str
 # from the second), in radians. The left stand mirrors the right one across y = 0.
 _START_RIGHT = tuple(math.radians(a) for a in (60.0, 125.0, -40.0))
 START = {"right": _START_RIGHT, "left": tuple(-a for a in _START_RIGHT)}
-# Where each wire's free end goes: over the mark along x, and 6 mm past it along y, so the two pass 12 mm.
+# Where each wire's free end goes: over the mark along x, and 6 mm past it along y, so the two overlap 12 mm.
 HALF_OVERLAP = 0.006
 FINAL_TIP = {"right": (MARK[0], MARK[1] + HALF_OVERLAP), "left": (MARK[0], MARK[1] - HALF_OVERLAP)}
 FINAL_DIR = {"right": math.pi / 2, "left": -math.pi / 2}  # the third link's angle: the wires point at each other
@@ -202,6 +203,7 @@ dress(LOOKS, hide=["mark_y"])
 OVERLAP_MIN = 0.005  # m: the free ends pass each other by at least this
 SIDE_MAX = 0.002  # m: and the wires' centre lines are at most this far apart sideways
 MARK_MAX = 0.005  # m: and the midpoint of the two free ends is at most this far from the mark's centre
+TOUCH_GAP = contact.TOUCH_SEP  # m: and the wires touch: the simulator reports a contact point between them this close
 NEAR_OVERLAP, NEAR_SIDE, NEAR_MARK = -0.010, 0.010, 0.010  # the 0.5 band: ends at most 10 mm short, 10 mm sideways
 LOOSE_MARK = 0.030  # m: the 0.25 band: each free end is at most this far from the mark's centre
 CLEAR_DIST = 0.03  # m: a gripper finger at least this far from every part of the stands has let go
@@ -210,15 +212,19 @@ OFF_TABLE_Z = -0.02  # m above the table: a part whose centre is lower has falle
 _WIRE_AT = CLIP_END + WIRE_SIZE[0] / 2  # the wire's centre, from the third hinge
 _LINK3_AT = (CLIP_END - EXT) / 2  # the third link's centre, from the third hinge
 
-# What the episode remembers: a wire came out of its clip at some step, whether a finger is near any part now, and for
-# how many seconds the crossing has held, still and let go of.
-STATE = {"pulled": False, "clear": False, "held": 0.0}
+# What the episode remembers: a wire came out of its clip at some step, whether a finger is near any part now, whether
+# the simulator reports the two wires touching now, and for how many seconds the crossing has held, still, touching and
+# let go of.
+STATE = {"pulled": False, "clear": False, "touch": False, "held": 0.0}
+CONTACT_LOG = True  # print a line to the run's log whenever the wires start or stop touching
+_LOGGED = {"touch": False}
 CONTROL_DT = 0.05  # s per control step (20 Hz), overwritten from the environment on the first step
 
 
 @on_reset
 def reset_memory(env=None) -> None:
-    STATE.update(pulled=False, clear=False, held=0.0)
+    STATE.update(pulled=False, clear=False, touch=False, held=0.0)
+    _LOGGED["touch"] = False
 
 
 def _finite(objects) -> bool:
@@ -278,6 +284,18 @@ def _violation(objects) -> bool:
     return bool(any(objects[n].pos[2] < TOP + OFF_TABLE_Z for n in MOVING))
 
 
+def wire_gap(objects) -> float:
+    """The gap (m) between the two wires' facing faces, from their heights: the centres' height difference less one
+    wire diameter (negative when they press into each other)."""
+    return float(abs(objects["left_wire"].pos[2] - objects["right_wire"].pos[2]) - WIRE_SIZE[2])
+
+
+def wires_touch(objects) -> bool:
+    """The wires touch: the simulator reports a contact point between them at 0.5 mm or less (read every physics
+    substep by ``contact.py``), and their faces are at most 0.5 mm apart by their heights."""
+    return bool(STATE["touch"] and wire_gap(objects) <= TOUCH_GAP)
+
+
 def crossed(objects) -> bool:
     """The wires cross over the mark: overlap 5 mm or more, sideways gap 2 mm or less, midpoint within 5 mm of the mark."""
     overlap, side, mid = crossing(objects)
@@ -285,12 +303,12 @@ def crossed(objects) -> bool:
 
 
 def settled(objects) -> bool:
-    """The crossing is made, everything is still and no finger is near the stands."""
-    return bool(crossed(objects) and still(objects) and STATE["clear"])
+    """The crossing is made with the wires touching, everything is still and no finger is near the stands."""
+    return bool(crossed(objects) and wires_touch(objects) and still(objects) and STATE["clear"])
 
 
 def success(objects) -> bool:
-    """The crossing is made, still, let go of, and has held for 3 s, with no wire pulled out."""
+    """The crossing is made with the wires touching, still, let go of, and has held for 3 s, with no wire pulled out."""
     if _violation(objects):
         return False
     _remember(objects)
@@ -298,9 +316,10 @@ def success(objects) -> bool:
 
 
 def score(objects) -> float:
-    """1.0: success (the crossing made, still, let go of and held for 3 s). 0.5: the free ends are within 10 mm of
-    meeting (at most 10 mm short of each other along the wires, at most 10 mm apart sideways) and their midpoint is
-    within 10 mm of the mark, whether or not the crossing is still, let go of or held yet. 0.25: each free end is
+    """1.0: success (the crossing made with the wires touching, still, let go of and held for 3 s). 0.5: the free
+    ends are within 10 mm of meeting (at most 10 mm short of each other along the wires, at most 10 mm apart
+    sideways) and their midpoint is within 10 mm of the mark, whether or not the wires touch or the crossing is
+    still, let go of or held yet. 0.25: each free end is
     within 3 cm of the mark. 0 otherwise, and 0 for the rest of the trial once a wire has come out of its clip, or if
     a part has fallen off the table."""
     if _violation(objects):
@@ -356,7 +375,8 @@ def hands_clear(objects, points: np.ndarray) -> bool:
 
 @on_step
 def watch_hands(env) -> None:
-    """Every step: whether the fingers have let go of the stands, and how long the crossing has held, still."""
+    """Every step: whether the fingers have let go of the stands, whether the wires touch, and how long the crossing
+    has held, still."""
     from fingers import finger_points
     from yam_arena.scene import object_states
 
@@ -367,6 +387,10 @@ def watch_hands(env) -> None:
         return
     _remember(objects)
     STATE["clear"] = hands_clear(objects, finger_points(env))
+    STATE["touch"] = contact.touching()
+    if CONTACT_LOG and STATE["touch"] != _LOGGED["touch"]:
+        _LOGGED["touch"] = STATE["touch"]
+        print(f"[wires] touching={STATE['touch']} gap={wire_gap(objects) * 1000:.2f} mm {contact.status()}", flush=True)
     STATE["held"] = STATE["held"] + CONTROL_DT if (not STATE["pulled"] and settled(objects)) else 0.0
 
 

@@ -32,7 +32,7 @@ EXT = 0.007
 LINK_W, LINK_H = 0.014, 0.024
 WIRE = (0.05, 0.005, 0.005)
 PLINTH = (0.08, 0.08)
-PLINTH_H = {"right": 0.030, "left": 0.038}
+PLINTH_H = {"right": 0.030, "left": 0.035}
 GAP = {"right": 0.003, "left": 0.003}  # from a base's top to the first link's underside
 MARK_SIZE = (0.036, 0.007, 0.001)
 

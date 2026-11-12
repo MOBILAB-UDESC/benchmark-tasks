@@ -52,8 +52,15 @@ def fresh_episode():
     T.reset_memory()
 
 
-def held(scenes, clear=True, held_s=3.0):
-    T.STATE.update(clear=clear, held=held_s)
+def held(scenes, clear=True, held_s=3.0, touch=True):
+    T.STATE.update(clear=clear, touch=touch, held=held_s)
+    return scenes
+
+
+def with_height(scenes, name, dz):
+    """The scene with one part lifted by ``dz`` metres."""
+    p = scenes[name]
+    scenes[name] = _state(p.pos + np.array([0.0, 0.0, dz]), 2 * math.atan2(p.quat_xyzw[2], p.quat_xyzw[3]))
     return scenes
 
 
@@ -110,11 +117,24 @@ def test_trap_is_specified():
             assert h.upper - h.lower == pytest.approx(2 * T.JOINT_RANGE)
         w = spec[f"{side}_wire"]
         assert w.to == f"{side}_link3" and w.hold == T.WIRE_HOLD and math.isinf(w.twist)
-    assert T.LINK_Z["left"] - T.LINK_Z["right"] > T.WIRE_SIZE[2] + 0.002  # the wires pass over each other
 
 
-def test_wires_clear_each_other_in_height_and_the_clips_stop_the_overlap():
-    assert T.WIRE_PITCH > T.WIRE_SIZE[2] + 0.002
+def test_wires_touch_by_design_the_left_stand_is_one_wire_diameter_higher():
+    """The centres' heights differ by exactly one wire diameter, so the lower wire's top face is the upper wire's
+    bottom face (the reviewers' 8 mm pitch left a 3 mm gap)."""
+    assert T.WIRE_PITCH == pytest.approx(T.WIRE_SIZE[2]) == pytest.approx(0.005)
+    assert T.LINK_Z["left"] - T.LINK_Z["right"] == pytest.approx(T.WIRE_SIZE[2])
+    s = final()
+    top_right = s["right_wire"].pos[2] + T.WIRE_SIZE[2] / 2
+    bottom_left = s["left_wire"].pos[2] - T.WIRE_SIZE[2] / 2
+    assert bottom_left == pytest.approx(top_right)
+    assert T.wire_gap(s) == pytest.approx(0.0, abs=1e-9)
+    # the base tops stay below the first links on both stands
+    for side in SIDES:
+        assert T.LINK_Z[side] - T.LINK_H / 2 - (T.TOP + T.PLINTH_H[side]) == pytest.approx(0.003)
+
+
+def test_the_clips_stop_the_overlap():
     # clips meet end to end at an overlap of 2 * wire length - 2 * clip face distance: the overlap can be at most
     assert 2 * T.WIRE_SIZE[0] > 2 * T.HALF_OVERLAP
 
@@ -124,6 +144,29 @@ def test_full_score_needs_the_hold():
     assert not T.success(final())
     assert T.score(held(final())) == 1.0
     assert T.success(held(final()))
+
+
+def test_full_score_needs_the_wires_touching():
+    """The exploit the reviewers named: the wires cross in plan view with a gap between them (centres 8 mm apart in
+    height) and no contact: it does not score 1.0, with or without the simulator's contact flag."""
+    s = with_height(final(), "left_wire", 0.003)  # the old pitch: 8 mm between centres, a 3 mm gap
+    assert T.wire_gap(s) == pytest.approx(0.003)
+    assert T.crossed(s) and not T.wires_touch(held(s))
+    assert T.score(held(s)) == 0.5 and not T.success(held(s))
+    # a simulator that reports no contact point blocks full score even with the poses touching
+    assert T.score(held(final(), touch=False)) == 0.5
+    assert not T.success(held(final(), touch=False))
+    # and a contact report cannot make up for a gap in height
+    assert T.score(held(s, touch=True)) == 0.5
+
+
+def test_touch_gap_half_a_millimetre():
+    assert T.wires_touch(held(with_height(final(), "left_wire", 0.0004)))
+    assert not T.wires_touch(held(with_height(final(), "left_wire", 0.0006)))
+    assert T.wires_touch(held(with_height(final(), "left_wire", -0.0004)))  # pressed into each other: touching
+    assert T.wires_touch(held(with_height(final(), "right_wire", -0.0004)))
+    assert not T.wires_touch(held(with_height(final(), "right_wire", -0.003)))
+    assert not T.wires_touch(held(with_height(final(), "right_wire", 0.003)))
 
 
 def test_full_score_needs_stillness():
@@ -328,3 +371,35 @@ def test_scored_boxes_are_inside_their_meshes_bounds():
         assert along == pytest.approx((T.CLIP_END + T.WIRE_SIZE[0] / 2) - (T.CLIP_END - T.EXT) / 2)
         assert wire[0][2] == link[0][2]
         assert wire[2][2] < link[2][2] and wire[2][1] < link[2][1]
+
+
+def test_min_separation_reads_the_contact_views_data():
+    """``contact.min_separation`` is the closest of all the reported points, ``inf`` for none."""
+    import contact
+
+    assert contact.min_separation([], [0], [0]) == float("inf")
+    assert contact.min_separation([0.004, -0.0002, 0.001], [3], [0]) == pytest.approx(-0.0002)
+    assert contact.min_separation([9.0, 0.002, 0.0001, 0.5], [0, 2], [0, 1]) == pytest.approx(0.0001)
+
+
+def test_touching_follows_the_closest_point():
+    import contact
+
+    contact._MON["sep"] = float("inf")
+    assert not contact.touching()
+    contact._MON["sep"] = 0.0004
+    assert contact.touching()
+    contact._MON["sep"] = 0.003  # a point inside the 5 mm contact offset, still 3 mm apart
+    assert not contact.touching()
+    contact._MON["sep"] = float("inf")
+
+
+def test_reset_forgets_the_contact():
+    import contact
+
+    contact._MON["sep"] = 0.0
+    contact.reset()
+    assert not contact.touching()
+    T.STATE["touch"] = True
+    T.reset_memory()
+    assert T.STATE["touch"] is False
