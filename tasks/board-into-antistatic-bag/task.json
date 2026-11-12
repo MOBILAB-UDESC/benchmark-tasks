@@ -17,6 +17,6 @@
   "run_limit": "2,400 steps (2 minutes at 20 Hz)",
   "reset_notes": "Take the board out of the bag and lay both flat on the mat as in the setup image, the bag's mouth facing the board.",
   "fidelity": "Rigid bodies, 240 Hz physics, 20 Hz control. The bag is a rigid stand-in for a soft one: one rigid body of thin box walls around a fixed 8 mm cavity, so it never opens wider, sags or folds. The board is one 3.6 mm box. Friction is 0.25 on the mat, 1.0 elsewhere. The crate is a SimReady model, fixed. Meshes are drawn, colliders are boxes. Grippers close with up to 50 N per pad. Release is read from PhysX contacts of all arm links with the bag and board (gap under 1 mm, 0.1 s). Masses are typical.",
-  "scores": "Dream-1 was not run on this version. Demo: 1.0 (success at step 409)",
+  "scores": "Dream-1: 0.0 (ran to the step limit without finishing). Demo: 1.0 (success at step 409)",
   "media": "M-J6CZKF"
 }

@@ -79,7 +79,7 @@ inspect-robots run --embodiment yam_arena --policy yam_scripted \
   unheld bag off the end of the mat and stays about half in.
 - The same demo with the left hand keeping hold of the bag in the crate (`LET_GO = BAG_GRIP`), so the filled bag lies
   in the crate but is never released, scores 0.5.
-- Dream-1 was not run on this version.
+- Dream-1: 0.0 (ran to the step limit without finishing).
 - Videos: `inspect-robots video ~/yam-eval/board-into-antistatic-bag-demo/<log>.json` writes one MP4 per camera next
   to the frames.
 - Offline checks: `python -m pytest -q test_board_into_antistatic_bag.py`.
