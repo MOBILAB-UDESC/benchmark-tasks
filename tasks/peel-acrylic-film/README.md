@@ -1,6 +1,7 @@
 # Hold the acrylic sheet down and peel its protective film off by the tab
 
-Peeling the masking film off a cut acrylic sheet, as every laser-cutting shop and makerspace does many times a day.
+Peeling the protective film off a new acrylic sheet, an everyday chore (new screens, appliance panels, signs, and every
+laser-cutting shop and makerspace).
 The film peels when its edge is lifted, strip by strip, while the hand comes back over the sheet: dragged along the
 sheet, the tab tears off before the glue lets go, and a torn tab scores 0. The sheet is light and loose, so the first
 pull tips it up with the film unless the other hand holds it down, and a lifted sheet scores 0. One hand holds the
@@ -36,6 +37,53 @@ twists the tab break the glue (the first versions came off without the sheet eve
 A step hook records each strip that has come unstuck (its centre 1 cm or more from its place, measured on the sheet)
 a torn tab (its centre 2 cm or more from its fold on the first strip), and a lifted or dragged sheet (its centre more
 than 2 cm from its start, or tilted more than 10 degrees).
+
+## Building the film for a real trial
+
+Every number below is the one the simulator uses (`GLUE_TWIST`, `GLUE_HOLD`, `TAB_HOLD`, `STRIP_W`, `TAB_SIZE`). The
+simulator's bonds are idealised, so a real film is built and then calibrated with a spring scale until it measures
+the same. The materials and the starting widths are a starting point and have not been tested on a real robot: the
+acceptance numbers in the calibration decide. Tools: a 0 to 10 N spring scale or digital force gauge (0.1 N steps), a
+0.1 g kitchen scale, a ruler, a craft knife, a perforating wheel and a few offcuts of the same acrylic.
+
+**Sheet and mat:** cast acrylic 150 x 200 x 3 mm (about 105 g: weigh it), on a 220 x 240 x 3 mm self-healing cutting
+mat. The sheet is loose (nothing holds it), and its protective film is peeled off before the trial.
+
+**Film:** 70 g/m2 brown kraft paper covering the sheet's right half (the robot's right: 150 mm along x by 100 mm
+along y, y from -0.15 to -0.05), cut into four strips 37.5 x 100 mm. The strips lie side by side along x with their
+cuts parallel to y, as in the simulator. The printing on the film is for the camera only.
+
+| Part | Build | What it must do |
+|---|---|---|
+| Strip joins (3 cuts) | one 19 mm wide strip of clear cellophane tape along each cut on the top face, 100 mm long, centred on the cut (9.5 mm on each strip), the paper edges touching | bends freely like paper and does not come apart: it must hold at least 8 N pulled along the film (twice the tab's 4 N) |
+| Glue (4 bands) | one 100 mm long band of low-tack removable tape (repositionable or painter's tape for delicate surfaces) on the underside of each strip, along its edge toward the robot, starting 6 mm wide, pressed on with one pass of a finger | lets the strip go when its far edge is lifted with 0.06 N m, which is 1.6 N pulled straight up at the far edge, 37.5 mm from the glued edge. Pulled along the sheet it must hold at least 8 N |
+| Tab (1) | kraft card folded and glued in layers to 30 mm wide, 25 mm tall and 3 mm thick, trimmed to 4 g, standing on strip 1's far edge on a 30 mm wide paper hinge (a 30 mm wide kraft strip glued across the fold under the tab and on strip 1's top, a few mm on each side) with a row of perforations along the fold | stands upright on its own, leans over when pushed, and tears at the hinge at 4 N, in any pull direction |
+
+**Calibration (do it on spare coupons from the same batch before each film, and again for each new roll of tape):**
+
+1. **Peel force, 1.6 N.** Stick one spare 37.5 x 100 mm strip with its glue band on an acrylic offcut lying on the mat.
+   Tape a 12 mm loop of thread to its far edge. Hook the scale to the loop and pull straight up, slowly (about 1
+   cm/s). The strip must let go between 1.4 and 1.8 N. Too high: make the band narrower in 1 mm steps (a new coupon
+   each time). Too low: widen it. Use the width that passes for all four glue bands. Test 5 coupons: all inside 1.4
+   to 1.8 N.
+2. **Hold along the sheet, 8 N.** On another coupon, pull the strip along the sheet with the scale held level at the
+   strip's far edge, in the direction of the film's peel (toward the robot). It must not let go below 8 N. The
+   simulator lets go at exactly 8 N. A real glue line only approximates that, and its job is the same: to outlast the
+   tab, which tears at 4 N, so that a pull along the sheet tears the tab and not the glue. If a coupon lets go
+   below 8 N at the width that passed step 1, switch to a tape with a stronger hold in shear and repeat step 1 with a
+   narrower band.
+3. **Tab tear, 4 N.** Stand the tab on a spare strip stuck as in step 1. Hook the scale to the tab's top (3 cm up)
+   and pull along the sheet toward the robot, then once more at 45 degrees upward. It must tear at 4 N, between 3.5
+   and 4.5 N, both ways. Too strong: perforate more (or cut one more bridge). Too weak: leave out perforations. Test
+   5 tabs: none below 3.5 N or above 4.5 N.
+4. **Strip joins hold.** Pull a joined pair of strips apart along the film: no failure below 8 N.
+5. **The sheet tips without a hand (the premise of the task).** Make a whole film, lay it on the sheet with nothing
+   holding it and peel the first strip by the tab straight up and back toward you. The sheet must tilt up or slide
+   (the simulator: tilts 14 degrees and slides 2.7 cm at 0.06 N m). Then lay the film again, press the sheet's near
+   left corner with one finger and peel: the sheet must stay flat. If it never moves, the glue is too weak. If it
+   moves even with the finger down, it is too strong: go back to step 1.
+6. **Mass and size.** Strips 3.75 x 10 cm, tab 3 x 2.5 cm and 3 mm thick, about 4 g (0.1 g scale), sheet about 105 g.
+   The real strips weigh under 1 g (the simulator's 5 g is for numerical stability).
 
 ## What it looks like
 
