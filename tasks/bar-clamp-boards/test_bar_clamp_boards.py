@@ -34,20 +34,31 @@ def _yaw(a):
     return np.array([0.0, 0.0, math.sin(a / 2), math.cos(a / 2)])
 
 
-def _scene(o=O_CLAMPED, opening=T.STACK_T, top_shift=(0.0, 0.0), vel=(0.0, 0.0, 0.0)):
-    """Boards on the spacers, the clamp's O at ``o`` and its sliding jaw's face ``opening`` above the fixed jaw's."""
+PRESS = 0.001  # m: the fixed jaw's pad pressed in 1 mm: 40 N
+
+
+def _scene(shift=(0.0, 0.0, 0.0), press=PRESS, opening=None, top_shift=(0.0, 0.0), vel=(0.0, 0.0, 0.0), o=None):
+    """Boards on the spacers, the clamp's O ``shift`` from where its pad face meets the bottom board with the pad
+    pressed in ``press`` (m), and the sliding jaw's face ``opening`` above the O's height (by default on the top
+    board's face)."""
+    if o is None:
+        o = O_CLAMPED + (0.0, 0.0, press) + np.asarray(shift, float)
     o = np.asarray(o, float)
+    if opening is None:
+        opening = T.UNDER + T.STACK_T - o[2]
     jaw = o + np.asarray(T.O_TO_JAW) + (0.0, 0.0, opening - T.JAW_OPEN)
+    pad = o + np.asarray(T.PAD_CENTRE) - (0.0, 0.0, press)
     return {
         "board_bottom": _state((X, Y, T.UNDER + T.BOARD_SIZE[2] / 2)),
         "board_top": _state((X + top_shift[0], Y + top_shift[1], T.UNDER + 1.5 * T.BOARD_SIZE[2])),
         "clamp": _state(o + np.asarray(T.O_TO_CENTRE), vel=vel),
         "sliding_jaw": _state(jaw, vel=vel),
+        "fixed_pad": _state(pad, vel=vel),
     }
 
 
 def _start():
-    return _scene(o=np.asarray(T.O_START), opening=T.JAW_OPEN)
+    return _scene(o=np.asarray(T.O_START), opening=T.JAW_OPEN, press=0.0)
 
 
 @pytest.fixture(autouse=True)
@@ -57,6 +68,7 @@ def fresh_episode():
 
 def _let_go(clear=True):
     T.STATE["clear"] = clear
+    T.STATE["still"] = True
 
 
 # -- the scene -------------------------------------------------------------------------------------------------------
@@ -64,7 +76,7 @@ def _let_go(clear=True):
 
 def test_loads():
     assert TASK.scene == "station"
-    assert set(TASK.free_objects) == {"board_bottom", "board_top", "clamp", "sliding_jaw"}
+    assert set(TASK.free_objects) == {"board_bottom", "board_top", "clamp", "sliding_jaw", "fixed_pad"}
 
 
 def test_spacers_under_the_ends_leave_the_middle_free():
@@ -91,7 +103,7 @@ def test_start_scores_zero():
 
 def test_start_jaw_travel_zero():
     assert T.jaw_travel(_start()) == pytest.approx(0.0, abs=1e-9)
-    assert T.jaw_travel(_scene()) == pytest.approx(T.STACK_T - T.JAW_OPEN, abs=1e-9)
+    assert T.jaw_travel(_scene(press=0.0)) == pytest.approx(T.STACK_T - T.JAW_OPEN, abs=1e-9)
 
 
 # -- the scoring ladder ------------------------------------------------------------------------------------------------
@@ -101,13 +113,69 @@ def test_clamped_and_let_go_succeeds():
     s = _scene()
     _let_go()
     assert T.gaps(s) == pytest.approx((0.0, 0.0), abs=1e-9)
+    assert T.clamping_force(s) == pytest.approx(40.0)
     assert T.success(s) and T.score(s) == 1.0
 
 
-def test_clamped_with_small_gaps_succeeds():
-    s = _scene(o=O_CLAMPED - (0.0, 0.0, 0.0008), opening=T.STACK_T + 0.0016)
+def test_force_is_the_pads_compression_times_its_stiffness():
+    for press in (0.0, 0.0005, 0.001, 0.0025):
+        assert T.clamping_force(_scene(press=press)) == pytest.approx(T.PAD_K * press)
+    assert T.pad_compression(_start()) == pytest.approx(0.0, abs=1e-9)
+
+
+def test_pad_turned_with_the_clamp_still_measured():
+    """The compression is along the clamp's own up axis: a clamp tilted 3 degrees reads the same."""
+    s = _scene(press=0.001)
+    a = math.radians(3.0)
+    q = np.array([math.sin(a / 2), 0.0, 0.0, math.cos(a / 2)])
+    c = np.asarray(s["clamp"].pos)
+    for name in ("clamp", "fixed_pad"):
+        rel = np.asarray(s[name].pos) - c
+        rot = T._rot(q) @ rel
+        s[name] = _state(c + rot, q)
+    assert T.clamping_force(s) == pytest.approx(40.0)
+
+
+@pytest.mark.parametrize("press,expected", [(0.0, 0.25), (0.0002, 0.25), (0.00049, 0.25), (0.00051, 1.0), (0.001, 1.0),
+                                            (0.0025, 1.0)])
+def test_minimum_force_20_N(press, expected):
+    """Below 20 N (0.5 mm of the pad's travel) the clamp is round the stack but does not grip it."""
     _let_go()
-    assert T.score(s) == 1.0
+    assert T.score(_scene(press=press)) == expected
+
+
+def test_clamp_hanging_with_the_lower_pad_just_clear_does_not_score():
+    """The reviewers' exploit: the clamp hangs from the top board, its lower pad 0.9 mm clear of the bottom board. The
+    old gap-under-1-mm rule scored it 1.0. The pad is not pressed in, so no force: 0.25."""
+    _let_go()
+    s = _scene(shift=(0.0, 0.0, -0.0009), press=0.0)
+    assert T.gaps(s)[0] == pytest.approx(0.0009)
+    assert T.clamping_force(s) == 0.0 and T.hanging(s)
+    assert T.score(s) == 0.25 and not T.success(s)
+
+
+def test_clamp_just_touching_without_force_does_not_score():
+    """Both pads on their boards, nothing pressing: a clamp that sits on the stack, not one that clamps it."""
+    _let_go()
+    s = _scene(press=0.0)
+    assert T.gaps(s) == pytest.approx((0.0, 0.0), abs=1e-9)
+    assert T.score(s) == 0.25
+
+
+def test_pressed_pad_with_the_sliding_jaw_open_does_not_score():
+    """The pad is pressed in, but the sliding jaw is 1 mm above the top board: the stack is not squeezed between the
+    jaws (the force would lift it)."""
+    _let_go()
+    s = _scene(opening=T.STACK_T - PRESS + 0.001)
+    assert T.clamping_force(s) == pytest.approx(40.0) and T.gaps(s)[1] == pytest.approx(0.001)
+    assert T.score(s) == 0.25
+
+
+def test_pressed_pad_off_the_bottom_board_does_not_score():
+    """A pad compression with the pad's face 1 cm under the bottom board is not a contact."""
+    _let_go()
+    s = _scene(shift=(0.0, 0.0, -0.01), opening=T.STACK_T + 0.01 - PRESS, press=PRESS)
+    assert T.gaps(s)[0] == pytest.approx(0.01 + 0.0, abs=1e-9) and T.score(s) == 0.25
 
 
 def test_standing_on_the_mat_half():
@@ -132,14 +200,43 @@ def test_still_held_half():
 
 
 def test_still_moving_half():
+    """Not yet settled (the clamp or a board moved more than 0.5 mm in the last 0.5 s): 0.5."""
     _let_go()
-    assert T.score(_scene(vel=(0.05, 0.0, 0.0))) == 0.5
+    T.STATE["still"] = False
+    assert not T.success(_scene()) and T.score(_scene()) == 0.5
+
+
+def _history(poses):
+    """The poses of successive control steps: each a (pos, quat) for the clamp, the bottom board and the top board."""
+    return [tuple((np.array(p, float), np.array(q, float)) for p, q in step) for step in poses]
+
+
+def _still_pose(dx=0.0, turn=0.0):
+    q = (0.0, 0.0, math.sin(turn / 2), math.cos(turn / 2))
+    return ((( dx, 0.0, 1.0), q), ((0.0, 0.0, 0.5), (0, 0, 0, 1)), ((0.0, 0.0, 0.52), (0, 0, 0, 1)))
+
+
+def test_settled_means_not_moved_in_half_a_second():
+    n = T.STILL_STEPS
+    assert T.settled(_history([_still_pose()] * (n + 1)))
+    assert not T.settled(_history([_still_pose()] * n))  # not 0.5 s of history yet
+    assert not T.settled(_history([_still_pose(0.0)] * n + [_still_pose(0.001)]))  # 1 mm in 0.5 s
+    assert T.settled(_history([_still_pose(0.0)] * n + [_still_pose(0.0004)]))  # 0.4 mm
+    assert not T.settled(_history([_still_pose(0.0)] * n + [_still_pose(0.0, turn=0.02)]))  # turned 0.02 rad
+
+
+def test_a_stack_reporting_a_residual_velocity_but_not_moving_is_still():
+    """A clamp pressing the stack with tens of newtons reports about 1.9 cm/s from the solver while staying put (seen
+    in the simulator). It counts as at rest: what is measured is where it is."""
+    s = _scene(vel=(0.019, 0.0, 0.0))
+    _let_go()
+    assert T.score(s) == 1.0
 
 
 @pytest.mark.parametrize("dx,expected", [(0.03, 1.0), (-0.03, 1.0), (0.04, 0.5), (-0.045, 0.5)])
 def test_middle_third(dx, expected):
     _let_go()
-    assert T.score(_scene(o=O_CLAMPED + (dx, 0.0, 0.0))) == expected
+    assert T.score(_scene(shift=(dx, 0.0, 0.0))) == expected
 
 
 @pytest.mark.parametrize("shift,expected", [((0.002, 0.0), 1.0), ((0.0, 0.0025), 1.0), ((0.004, 0.0), 0.5),
@@ -158,33 +255,34 @@ def test_turned_top_board_is_misaligned():
 
 def test_sliding_jaw_open_quarter():
     _let_go()
-    s = _scene(opening=T.STACK_T + 0.0015)
+    s = _scene(opening=T.STACK_T - PRESS + 0.0015)
     assert T.straddles(s) and not T.clamped(s) and T.score(s) == 0.25
 
 
-def test_fixed_jaw_off_the_board_quarter():
-    """Jaws closed on the top board, but the clamp sits on the mat: the fixed jaw is 1 cm under the stack."""
+def test_sliding_jaw_just_touching_counts():
     _let_go()
-    s = _scene(o=O_CLAMPED - (0.0, 0.0, 0.01), opening=T.STACK_T + 0.01)
-    assert T.gaps(s)[0] == pytest.approx(0.01) and T.score(s) == 0.25
+    s = _scene(opening=T.STACK_T - PRESS + 0.0004)
+    assert T.clamped(s) and T.score(s) == 1.0
+    s = _scene(opening=T.STACK_T - PRESS + 0.0006)  # 0.6 mm: off the board
+    assert not T.clamped(s) and T.score(s) == 0.25
 
 
 def test_jaws_wide_open_round_the_stack_quarter():
     _let_go()
-    s = _scene(o=O_CLAMPED - (0.0, 0.0, 0.01), opening=T.JAW_OPEN)
+    s = _scene(shift=(0.0, 0.0, -0.01), opening=T.JAW_OPEN, press=0.0)
     assert T.score(s) == 0.25
 
 
 def test_pads_barely_on_the_boards_zero():
     """The clamp pulled back so the pads are less than 1 cm inside the boards' edge."""
     _let_go()
-    s = _scene(o=O_CLAMPED + (0.0, 0.034, 0.0))
+    s = _scene(shift=(0.0, 0.040, 0.0))
     assert not T.straddles(s) and T.score(s) == 0.0
 
 
 def test_beside_the_stack_closed_zero():
     _let_go()
-    s = _scene(o=np.asarray(T.O_START), opening=0.01)
+    s = _scene(o=np.asarray(T.O_START), opening=0.01, press=0.0)
     assert T.score(s) == 0.0
 
 
@@ -203,10 +301,10 @@ def test_pad_ends_inside_the_boards():
 
 def test_tilted_clamp_touches_at_one_end():
     """A clamp tilted 1.5 degrees, its pads' centres 0.9 mm off the boards: one end of each pad touches."""
-    s = _scene()
+    s = _scene(press=0.0)
     a = math.radians(1.5)
     q = np.array([math.sin(-a / 2), 0.0, 0.0, math.cos(-a / 2)])  # the jaws' tips up
-    for name in ("clamp", "sliding_jaw"):
+    for name in ("clamp", "sliding_jaw", "fixed_pad"):
         s[name] = _state(s[name].pos, q)
     f, g = T.gaps(s)
     assert f < 0.001 and g < 0.001
@@ -216,8 +314,8 @@ def test_clamp_turned_round_the_stack_still_measured():
     """A clamp tilted 1 degree about x still reads its gaps along the boards' normal."""
     s = _scene()
     tilt = np.array([math.sin(math.radians(0.5)), 0.0, 0.0, math.cos(math.radians(0.5))])
-    s["clamp"] = _state(s["clamp"].pos, tilt)
-    s["sliding_jaw"] = _state(s["sliding_jaw"].pos, tilt)
+    for name in ("clamp", "sliding_jaw", "fixed_pad"):
+        s[name] = _state(s[name].pos, tilt)
     f, g = T.gaps(s)
     assert abs(f) < 0.002 and abs(g) < 0.002
 
@@ -230,6 +328,9 @@ def test_fallen_zero():
     s = _scene()
     s["clamp"] = _state((0.3, 0.0, T.TOP - 0.3))
     assert T.score(s) == 0.0
+    s = _scene()
+    s["fixed_pad"] = _state((0.3, 0.0, T.TOP - 0.3))
+    assert T.score(s) == 0.0
 
 
 def test_non_finite_zero():
@@ -241,7 +342,70 @@ def test_non_finite_zero():
 
 
 def test_distance_falls_as_the_clamp_closes():
-    assert T.distance(_start()) > T.distance(_scene(opening=T.JAW_OPEN)) > T.distance(_scene())
+    assert (T.distance(_start()) > T.distance(_scene(opening=T.JAW_OPEN, press=0.0))
+            > T.distance(_scene(press=0.0)) > T.distance(_scene()))
+
+
+def test_pad_spring_fits_its_travel():
+    """The pad's 3 mm of travel reaches past 20 N and tops out at 120 N, and the jaw's own face is 3 mm under the
+    pad's rest face, so the stack bottoms out on it at the end of the travel."""
+    assert T.FORCE_MIN / T.PAD_K < T.PAD_TRAVEL and T.PAD_K * T.PAD_TRAVEL == pytest.approx(120.0)
+    face = T.FIXED_JAW[1][2] + T.FIXED_JAW[2][2] / 2  # the jaw's top face, from O
+    assert face == pytest.approx(-T.PAD_TRAVEL)
+    assert T.PAD_CENTRE[2] + T.PAD_SIZE[2] / 2 == pytest.approx(0.0)
+
+
+# -- the trigger -------------------------------------------------------------------------------------------------------
+
+
+def test_stop_follows_the_jaw_down_never_up():
+    s = _scene(press=0.0, opening=0.05)  # the jaw 2 mm... any travel
+    travel = T.jaw_travel(s)
+    assert T.next_stop(s, False, 0.0) == pytest.approx(travel)  # pushed past the stop: the stop follows
+    assert T.next_stop(s, False, travel - 0.01) == pytest.approx(travel - 0.01)  # never moves back up
+    assert T.next_stop(s, False, travel + T.TOOTH / 2) == pytest.approx(travel + T.TOOTH / 2)  # within a click: stays
+
+
+def test_trigger_squeezes_only_when_the_jaw_is_on_the_stack_and_pressed():
+    s = _scene(press=0.0)
+    travel = T.jaw_travel(s)
+    assert T.trigger_ready(s)
+    assert T.next_stop(s, True, travel) == pytest.approx(travel - T.TAKEUP_STEP)  # the pad is not pressed in yet
+    assert T.next_stop(s, False, travel) == pytest.approx(travel)  # nobody pressing
+    open_jaw = _scene(press=0.0, opening=T.STACK_T + 0.001)  # the sliding jaw 1 mm off the top board
+    assert not T.trigger_ready(open_jaw)
+    assert T.next_stop(open_jaw, True, T.jaw_travel(open_jaw)) == pytest.approx(T.jaw_travel(open_jaw))
+    beside = _scene(shift=(0.0, 0.040, 0.0), press=0.0)  # the clamp not round the stack
+    assert T.next_stop(beside, True, T.jaw_travel(beside)) == pytest.approx(T.jaw_travel(beside))
+
+
+def test_trigger_takes_up_slack_fast_then_builds_force_slowly():
+    pressed = _scene(press=0.0005)  # pad pressed in 0.5 mm
+    travel = T.jaw_travel(pressed)
+    assert T.next_stop(pressed, True, travel) == pytest.approx(travel - T.SQUEEZE_STEP)
+    slack = _scene(shift=(0.0, 0.0, -0.005), press=0.0)  # the pad 5 mm under the bottom board, the jaw on the top
+    assert T.trigger_ready(slack)
+    assert T.next_stop(slack, True, T.jaw_travel(slack)) == pytest.approx(T.jaw_travel(slack) - T.TAKEUP_STEP)
+
+
+def test_trigger_stops_at_the_pads_travel():
+    s = _scene(press=T.SQUEEZE_MAX + 0.0001)
+    travel = T.jaw_travel(s)
+    assert T.next_stop(s, True, travel) == pytest.approx(travel)
+
+
+def test_squeeze_reaches_the_minimum_force_in_ten_steps():
+    """Each squeezed step presses the stack 0.05 mm more (2 N): 20 N takes 10 steps, half a second."""
+    assert T.FORCE_MIN / (T.PAD_K * T.SQUEEZE_STEP) == pytest.approx(10.0)
+    assert T.PAD_K * T.SQUEEZE_MAX == pytest.approx(100.0)
+
+
+def test_finger_pressing_the_jaw_only():
+    s = _scene()
+    top = np.asarray(s["sliding_jaw"].pos) + (0.0, 0.0, T.JAW_SIZE[2] / 2 + 0.002)
+    assert T.finger_distance(s, [top], jaw_only=True) == pytest.approx(0.002)
+    on_handle = O_CLAMPED + (0.015, T.GRIP_Y, PRESS)
+    assert T.finger_distance(s, [on_handle], jaw_only=True) > T.PRESS_DIST  # a grip on the handle does not press
 
 
 # -- the fingers -------------------------------------------------------------------------------------------------------
@@ -249,7 +413,7 @@ def test_distance_falls_as_the_clamp_closes():
 
 def test_finger_on_the_handle_holds():
     s = _scene()
-    grip = O_CLAMPED + (0.015, T.GRIP_Y, 0.0)  # on the handle's side
+    grip = O_CLAMPED + (0.015, T.GRIP_Y, PRESS)  # on the handle's side
     assert T.finger_distance(s, [grip]) == pytest.approx(0.0, abs=1e-9)
 
 
@@ -261,7 +425,7 @@ def test_finger_on_the_sliding_jaw_holds():
 
 def test_finger_above_the_bar_is_clear():
     s = _scene()
-    above = O_CLAMPED + (0.0, 0.0, T.CLAMP_HIGH[2] + 0.02)
+    above = O_CLAMPED + (0.0, 0.0, PRESS + T.CLAMP_HIGH[2] + 0.02)
     assert T.finger_distance(s, [above]) == pytest.approx(0.02, abs=1e-9)
     assert T.finger_distance(s, []) == math.inf
 
@@ -313,8 +477,16 @@ def test_demo_order():
     let_go, _ = _at(plan["left"], "let go")
     down, _ = _at(plan["right"], "down to the jaw")
     pushed, _ = _at(plan["right"], "push the jaw down")
-    held, _ = _at(plan["right"], "hold while the left arm lets go")
+    held, _ = _at(plan["right"], "press the trigger, hold while the left arm lets go")
     assert lifted <= down - 0.8 and pushed < let_go - 1.0 and held >= let_go + 1.0
+
+
+def test_demo_presses_the_trigger_long_enough_to_reach_the_minimum_force():
+    """The right arm's fingers stay on the sliding jaw after the jaw is home: 10 steps (0.5 s) of squeeze give 20 N
+    after the pad is up, and the slack takes about 1.5 s before that."""
+    plan = T.demo()
+    _, held = _at(plan["right"], "press the trigger, hold while the left arm lets go")
+    assert held.duration >= 4.0 and T.PRESS_HOLD == held.duration
 
 
 def test_demo_keeps_the_arms_apart():
