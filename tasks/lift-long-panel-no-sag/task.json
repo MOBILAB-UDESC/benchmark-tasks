@@ -17,6 +17,6 @@
   "run_limit": "600 steps (30 seconds at 20 Hz)",
   "reset_notes": "Lay the panel back on the bench rail, centred at x = 26 cm, flat, with its lower face on the rail. Run with -E object_jitter=0: the demo is open loop and the panel is never jittered. A 4 mm bow does not damage the panel, so the same panel can be reused, but weigh it (120 g +- 3 g) and check its stiffness (cantilever test in the README) before the first trial.",
   "fidelity": "Rigid bodies, 240 Hz physics, 20 Hz control. The panel is 20 rigid 3 cm segments, 0.8 mm thick like the board, on hinges with springs set to EI = 0.07 N m2, 120 g spread evenly (the real one has six lumps: same bows within 2 %). It bends in one plane only, no twist or sideways bend. Nothing breaks: the 4 mm limit is only scored. Rails are fixed boxes. Pads close at 50 N. Parts and traces are drawn, not modelled.",
-  "scores": "Dream-1 was not run on this version. Demo: 1.0 (success at step 237)",
+  "scores": "Dream-1: 0.0 (ran to the step limit without finishing). Demo: 1.0 (success at step 237)",
   "media": "M-MKDA7S"
 }

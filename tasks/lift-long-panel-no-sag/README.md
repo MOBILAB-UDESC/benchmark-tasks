@@ -96,7 +96,7 @@ inspect-robots run --embodiment yam_arena --policy yam_scripted \
 ```
 
 - The run prints `task_score` at the end. With `-E object_jitter=0` the layout is fixed and no seed is needed.
-- Dream-1 was not run on this version of the task.
+- Dream-1: 0.0 (ran to the step limit without finishing).
 - The demo: both arms come down beside the panel at y = +-17 cm (13 cm in from each end), pinch its 6 cm width with the
   pad tips 1.3 cm under it, lift it 12 cm together, carry it 14 cm forward at that height, lower it onto the rack's rail,
   open and back off. It reaches 1.0 and ends on success at step 237 (11.9 s at 20 Hz): the panel is on the rail, still,
