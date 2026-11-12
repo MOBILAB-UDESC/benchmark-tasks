@@ -106,7 +106,7 @@ inspect-robots run --embodiment yam_arena --policy yam_scripted \
 - A shortcut scores what the text says: the same demo with the right arm taking its fingers off the sliding jaw after 1
   s instead of 4.6 s (`PRESS_HOLD = 1.0`, `scripts/task-ablate.sh bar-clamp-boards notrigger PRESS_HOLD=1.0`) leaves
   the clamp round the stack without the 20 N and scores 0.25.
-- Dream-1 was not run on this version. (Its one run on the earlier version, which scored on gaps and not on force,
+- Dream-1: 0.0 (ran to the step limit without finishing). (Its one run on the earlier version, which scored on gaps and not on force,
   scored 0.0 and does not apply to this scorer.)
 - Videos: `inspect-robots video ~/yam-eval/bar-clamp-boards-demo/<log>.json` writes one MP4 per camera next to the
   frames.
