@@ -93,7 +93,7 @@ inspect-robots run --embodiment yam_arena --policy yam_scripted \
   in the slot, or the lock breaks and the trial is scored 0 from then on.
 - The same demo with the right arm letting go of the button before the left arm lifts (`PRESS_HOLD_S = 0.2`) also
   scores 0: the pin is back in the hole, the pull breaks the latch, and the card in the tray does not score.
-- Dream-1 was not run on this version of the scene and scorer.
+- Dream-1: 0.0 (ran to the step limit without finishing).
 - Videos: `inspect-robots video ~/yam-eval/latch-and-lift-graphics-card-demo/<log>.json` writes one MP4 per camera
   next to the frames.
 - Offline checks: `python -m pytest -q test_latch_and_lift_graphics_card.py`.
