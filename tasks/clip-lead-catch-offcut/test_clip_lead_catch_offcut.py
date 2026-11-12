@@ -1,7 +1,8 @@
 """Offline checks (no GPU): the task file loads, the layout (the lead on its break points, the nippers on their sliding
 joint, the cup and mat, the arms in their halves), the clip rule (what counts as the nippers closed on the lead, flush
 or high, and what does not), every scoring outcome, the offcut's snap and flight and the episode's memory, the
-shortcuts (one hand, a high cut), and the demo's order and reach. Run in the yam_arena environment:
+shortcuts (one hand, a high cut), the contact rule (held and carried is not flight, free flight is), the docs matching
+the scene, and the demo's order and reach. Run in the yam_arena environment:
 python -m pytest -q test_clip_lead_catch_offcut.py"""
 
 from __future__ import annotations
@@ -87,11 +88,16 @@ def fresh_episode():
     T.reset_memory()
 
 
-def _after_clip(top):
-    """Clip the lead flush, then let the offcut be at ``top``."""
+LEFT = ("/World/envs/env_0/LeftArm/finger_a", "/World/envs/env_0/LeftArm/finger_b")  # the left gripper's two pads
+RIGHT = ("/World/envs/env_0/RightArm/finger_a", "/World/envs/env_0/RightArm/finger_b")
+ONE_PAD = LEFT[:1]
+
+
+def _after_clip(top, links=()):
+    """Clip the lead flush, then let the offcut be at ``top`` (touched by the robot links ``links``)."""
     T.observe(_clip(), DT)
     assert T.STATE["cut"] == "flush"
-    T.observe(_scene(top=top), DT)
+    T.observe(_scene(top=top), DT, links)
 
 
 # -- the scene -------------------------------------------------------------------------------------------------------
@@ -162,6 +168,7 @@ def test_board_cup_and_mat():
     assert np.hypot(T.CUP.pos[0] - T.LEAD_XY[0], T.CUP.pos[1] - T.LEAD_XY[1]) + T.CUP_IN_R < T.FLY_DIST
     assert T.CUP_RIM - T.MAT_TOP == pytest.approx(0.0609, abs=1e-3)
     assert T.CUP.package == "consumable_cup_paper_a01"
+    assert T.CUP.pos[2] + T.CUP_H == pytest.approx(T.CUP_RIM)
 
 
 def test_the_offcut_is_inside_its_box_in_the_demo_and_the_lead_stands_14_mm():
@@ -265,6 +272,84 @@ def test_before_the_clip_nothing_flies():
     assert not T.STATE["flew"]
 
 
+# -- held and carried is not flight, free flight is ------------------------------------------------------------------
+
+CARRIED = T.BASE_POINT + (0.0, 0.07, 0.11)  # a deliberate carry: 13 cm from the board, over the cup's side
+FAR_ON_MAT = T.BASE_POINT + (0.0, 0.25, 0.0)
+
+
+def test_pinch_needs_both_pads_of_one_arm():
+    assert T.pinched(LEFT) and T.pinched(RIGHT)
+    assert not T.pinched(()) and not T.pinched(ONE_PAD)
+    assert not T.pinched((LEFT[0], RIGHT[0]))  # one pad of each hand is not a grip
+
+
+def test_held_and_carried_past_10_cm_does_not_fly():
+    T.observe(_clip(), DT)
+    for k in range(10):  # lifted and carried 13 cm from the board, both pads on it, every step
+        T.observe(_scene(top=CARRIED + (0.0, 0.0, 0.002 * k)), DT, LEFT)
+        assert not T.STATE["flew"] and T.STATE["held"]
+    s = _scene(top=CARRIED)
+    assert T.offcut_distance(s) > T.FLY_DIST
+    assert T.score(s) == 0.5 and not T.success(s)  # carried: not zero, and not done
+
+
+def test_held_and_carried_then_let_go_in_the_cup_is_full_score():
+    T.observe(_clip(), DT)
+    T.observe(_scene(top=CARRIED), DT, LEFT)
+    T.observe(_scene(top=(*T.CUP_XY, T.CUP_RIM + 0.01)), DT, LEFT)  # over the cup, still held
+    T.observe(_scene(top=_state(IN_CUP, vel=(0.0, 0.0, -0.5))), DT)  # dropped: nothing touches it
+    T.observe(_scene(top=IN_CUP), DT)
+    s = _scene(top=IN_CUP)
+    assert not T.STATE["flew"] and T.score(s) == 1.0 and T.success(s)
+
+
+def test_free_flight_past_10_cm_scores_zero():
+    T.observe(_clip(), DT)
+    T.observe(_scene(top=CARRIED), DT)  # the same place as the carry, with no gripper on it
+    assert T.STATE["flew"]
+    assert T.score(_scene(top=CARRIED)) == 0.0 and not T.success(_scene(top=CARRIED))
+
+
+def test_flown_offcut_that_lands_on_the_mat_or_in_the_cup_is_zero():
+    for end in (FAR_ON_MAT, IN_CUP):
+        T.reset_memory()
+        T.observe(_clip(), DT)
+        T.observe(_scene(top=T.BASE_POINT + (0.0, 0.2, 0.05)), DT)  # the snap throws it
+        T.observe(_scene(top=end), DT)
+        assert T.STATE["flew"] and T.score(_scene(top=end)) == 0.0 and not T.success(_scene(top=end))
+
+
+def test_flown_offcut_caught_late_is_still_zero():
+    T.observe(_clip(), DT)
+    T.observe(_scene(top=T.BASE_POINT + (0.0, 0.2, 0.05)), DT)  # in flight
+    T.observe(_scene(top=CARRIED), DT, LEFT)  # a gripper closes on it afterwards
+    assert T.STATE["flew"] and T.score(_scene(top=CARRIED)) == 0.0
+
+
+def test_one_pad_touching_is_not_a_hold():
+    T.observe(_clip(), DT)
+    T.observe(_scene(top=CARRIED), DT, ONE_PAD)  # a finger brushing the offcut in flight
+    assert T.STATE["flew"] and T.score(_scene(top=CARRIED)) == 0.0
+
+
+def test_one_hand_shortcut_flies_even_if_a_gripper_touches_it_late():
+    # the right hand's pads clip the nippers, not the lead: nothing holds the offcut when the snap sends it away
+    T.observe(_clip(), DT)
+    T.observe(_scene(top=T.BASE_POINT + (0.05, 0.05, 0.08)), DT)  # 11 cm out, nothing on it
+    assert T.STATE["flew"]
+
+
+def test_held_inside_10_cm_and_beyond_are_judged_by_the_same_rule():
+    T.observe(_clip(), DT)
+    T.observe(_scene(top=T.BASE_POINT + (0.0, 0.0, 0.05)), DT)  # near the board without a gripper: no flight
+    assert not T.STATE["flew"]
+    T.observe(_scene(top=CARRIED), DT, LEFT)
+    assert not T.STATE["flew"]
+    T.observe(_scene(top=CARRIED), DT)  # let go of it 13 cm up: it falls free
+    assert T.STATE["flew"]
+
+
 # -- scoring ---------------------------------------------------------------------------------------------------------
 
 
@@ -286,6 +371,22 @@ def test_moving_offcut_in_the_cup_is_not_one():
     spinning = _scene(top=ObjectState(pos=np.asarray(IN_CUP), quat_xyzw=np.array([0, 0, 0, 1.0]), lin_vel=np.zeros(3),
                                       ang_vel=np.array([0.0, 0.0, 2.0]), low=np.zeros(3), high=np.zeros(3)))
     assert T.score(spinning) == 0.5
+
+
+def test_still_in_the_cup_but_held_is_not_full_score():
+    # an offcut that lies still over the cup while the gripper has not let go (a stationary object held up is not done)
+    _after_clip(IN_CUP, LEFT)
+    s = _scene(top=IN_CUP)
+    assert T.score(s) == 0.5 and not T.success(s)
+    T.observe(s, DT, ONE_PAD)  # a finger still touching it: also not let go
+    assert T.score(s) == 0.5 and not T.success(s)
+    T.observe(s, DT)  # let go
+    assert T.score(s) == 1.0 and T.success(s)
+
+
+def test_at_rest_on_the_mat_but_touched_is_half():
+    _after_clip(ON_MAT, ONE_PAD)
+    assert T.score(_scene(top=ON_MAT)) == 0.5
 
 
 def test_at_rest_on_the_mat_is_three_quarters():
@@ -344,7 +445,7 @@ def test_memory_resets():
     T.observe(_scene(top=T.BASE_POINT + (0.3, 0.0, 0.0)), DT)
     assert T.STATE["cut"] and T.STATE["flew"]
     T.reset_memory()
-    assert T.STATE == {"cut": "", "flew": False, "kick": None}
+    assert T.STATE == {"cut": "", "flew": False, "kick": None, "held": False, "touch": False}
 
 
 def test_the_score_ladder():
@@ -456,3 +557,29 @@ def test_demo_high_cut_variant_holds_the_nippers_up(monkeypatch):
     monkeypatch.setattr(T, "CUT_HIGH", 0.0)
     flat = {w.label: w.pos for w in T.demo()["right"]}
     assert base["rest on the board"][2] - flat["rest on the board"][2] == pytest.approx(0.006)
+
+
+# -- the docs match the scene ----------------------------------------------------------------------------------------
+
+
+def _cm(x: float) -> str:
+    return f"{x * 100:.1f}".rstrip("0").rstrip(".")
+
+
+def test_task_json_and_readme_state_the_implemented_sizes_and_masses():
+    import json
+
+    text = {"task.json": json.dumps(json.load(open(HERE / "task.json"))), "README.md": open(HERE / "README.md").read()}
+    board = f"{_cm(T.BOARD_SIZE[0])} x {_cm(T.BOARD_SIZE[1])} x {_cm(T.BOARD_SIZE[2])} cm"
+    rails = f"{_cm(T.RAIL[0])} x {_cm(T.RAIL[1])} x {_cm(T.RAIL[2])} cm"
+    length = _cm(T.FOOT_Y[1] - T.PLATE_Y[0])
+    grams = lambda m: f"{round(m * 1000)} g"  # noqa: E731
+    for name, t in text.items():
+        assert board in t and rails in t, (name, board, rails)
+        assert f"{length} cm long" in t, (name, length)
+        assert grams(T.CUTTER.mass) in t and grams(T.JAW.mass) in t, name
+        assert grams(T.CUTTER.mass + T.JAW.mass) in t, name
+        assert "0.6 g" in t and "1.2 g" in t and (T.LEAD_LOW.mass, T.LEAD_TOP.mass) == (0.0006, 0.0012), name
+        for stale in ("10 x 7 x 0.16", "10 x 0.8 x 1.2", "17.2 cm long", "70 g", "(40 g)", "(30 g)", "14.2 cm"):
+            assert stale not in t, (name, stale)
+    assert "CC-BY 4.0" in text["README.md"] and "consumable_cup_paper_a01" in text["README.md"]

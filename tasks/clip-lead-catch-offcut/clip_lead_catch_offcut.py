@@ -1,13 +1,14 @@
 """On the station table, a grey anti-static mat (28 x 36 cm) with, in the middle, a green circuit board (8 x 7 cm,
 1.6 mm thick) lying solder side up on two black rails, so a blue capacitor hangs under it. One of the capacitor's
 leads (silver, 2 mm square) stands 14 mm up through the board at its centre. Right of the board, on the mat, lies a
-pair of flush-cutting nippers (red and black handles, 19 cm long), pointing forward and to the robot's left. On the board's
+pair of flush-cutting nippers (red and black handles, 19.2 cm long), pointing forward and to the robot's left. On the board's
 left, on the mat, stands a small brown paper scrap cup (5.7 cm across, 6 cm tall, white inside).
 
 The task: clip the lead flush to the board with the nippers, and put the offcut in the scrap cup.
 
 ``bonds.py`` puts the lead's two pieces and the nippers' moving jaw on joints, ``compound.py`` builds the nippers from
-several box colliders, ``simready.py`` loads the scrap cup, and ``looks.py`` draws the board and the nippers.
+several box colliders, ``simready.py`` loads the scrap cup, ``contacts.py`` reads which robot links touch the offcut, and
+``looks.py`` draws the board and the nippers.
 
 Run it:  inspect-robots run --embodiment yam_arena -E task=clip_lead_catch_offcut.py --scorer task_score ...
 """
@@ -21,6 +22,7 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 import numpy as np  # noqa: E402
+import contacts  # noqa: E402
 from bonds import Bonded, Sliding, on_pre_step, on_reset, on_spawn, on_step, release  # noqa: E402
 from compound import compound  # noqa: E402
 from looks import dress  # noqa: E402
@@ -155,7 +157,7 @@ HIGH_MAX = 8 * MM  # up to this high the nippers can still clip the lead (at its
 LEVEL_DEG = 10.0  # the nippers' jaws within this many degrees of level
 SQUEEZED = 3 * MM  # the blade has moved this far from open
 TOUCH = 0.6 * MM  # the blade's face this close to the lead's face is on it
-FLY_DIST = 0.10  # m: the offcut this far from where the lead left the board has flown
+FLY_DIST = 0.10  # m: the offcut this far from where the lead left the board, and not held, has flown
 MAT_REST = 0.007  # m: the offcut's centre this low over the mat lies on it
 KICK = 3.0  # m/s: the clipped lead's snap
 
@@ -175,13 +177,26 @@ def _damp(name: str, prim) -> None:
 
 
 # What the episode remembers: how the lead was clipped ("flush", "high" or ""), whether the offcut ever went 10 cm from
-# the board, and the snap waiting to be given to the offcut at the next control step.
-STATE = {"cut": "", "flew": False, "kick": None}
+# the board without being held (free flight), the snap waiting to be given to the offcut at the next control step, and
+# for the control step that just ended whether a gripper held the offcut (both finger pads on it, in some physics
+# substep) and whether any robot link touched it.
+STATE = {"cut": "", "flew": False, "kick": None, "held": False, "touch": False}
 
 
 @on_reset
 def reset_memory(env=None) -> None:
-    STATE.update(cut="", flew=False, kick=None)
+    STATE.update(cut="", flew=False, kick=None, held=False, touch=False)
+    contacts.take()
+
+
+contacts.watch("lead_top")
+
+
+def pinched(links) -> bool:
+    """Whether a gripper holds the offcut: two robot links of one arm, the two finger pads, touch it (a separation of
+    1 mm or less, the contact the simulator reports) in the same control step."""
+    arms = [contacts.arm_of(link) for link in links]
+    return any(arms.count(arm) >= 2 for arm in ("left", "right"))
 
 
 def _finite(objects) -> bool:
@@ -240,25 +255,30 @@ def offcut_distance(objects) -> float:
     return float(np.linalg.norm(np.asarray(objects["lead_top"].pos) - BASE_POINT))
 
 
-def observe(objects, dt: float = 0.05) -> None:
-    """One control step of the episode's memory: the clip, the snap it gives the offcut, and the offcut's flight."""
+def observe(objects, dt: float = 0.05, links=()) -> None:
+    """One control step of the episode's memory: the clip, the snap it gives the offcut, and the offcut's flight.
+    ``links`` are the robot links that touched the offcut during the step (see ``contacts.py``). The offcut flies when
+    it is more than 10 cm from the board and no gripper holds it. A held offcut carried higher or further is not
+    flying."""
     if not _finite(objects):
         return
+    STATE["held"], STATE["touch"] = pinched(links), bool(links)
     if not STATE["cut"]:
         STATE["cut"] = cut_class(objects)
         if STATE["cut"]:
             names = ["lead_low", "lead_top"] if STATE["cut"] == "flush" else ["lead_top"]
             STATE["kick"] = (names, kick_velocity(objects))
-    elif offcut_distance(objects) > FLY_DIST:
+    elif offcut_distance(objects) > FLY_DIST and not STATE["held"]:
         STATE["flew"] = True
 
 
 @on_step
 def watch(env) -> None:
-    """Every control step: the poses into the episode's memory, and the joint that was clipped let go."""
+    """Every control step: the poses and the offcut's contacts into the episode's memory, and the joint that was
+    clipped let go."""
     from yam_arena.scene import object_states
 
-    observe(object_states(env, NAMES), float(env.unwrapped.step_dt))
+    observe(object_states(env, NAMES), float(env.unwrapped.step_dt), contacts.take())
     if STATE["kick"] is not None:
         release(STATE["kick"][0][0])
 
@@ -293,23 +313,30 @@ def on_mat(state) -> bool:
     return bool(inside and p[2] < MAT_TOP + MAT_REST)
 
 
+def free(objects) -> bool:
+    """The offcut is in free flight now: more than 10 cm from the board and no gripper holds it."""
+    return offcut_distance(objects) > FLY_DIST and not STATE["held"]
+
+
 def success(objects) -> bool:
-    """Clipped flush, the offcut never past 10 cm, and it lies still in the scrap cup."""
-    if not _finite(objects) or STATE["cut"] != "flush" or STATE["flew"]:
+    """Clipped flush, the offcut never in free flight beyond 10 cm, and it lies still in the scrap cup, let go: no robot
+    link touches it."""
+    if not _finite(objects) or STATE["cut"] != "flush" or STATE["flew"] or free(objects):
         return False
     top = objects["lead_top"]
-    return bool(offcut_distance(objects) <= FLY_DIST and in_cup(top) and top.resting())
+    return bool(in_cup(top) and top.resting() and not STATE["touch"])
 
 
 def score(objects) -> float:
-    """1.0: success. 0.75: clipped flush, the offcut lies still on the mat. 0.5: clipped flush, the offcut within 10 cm
-    but neither. 0.25: clipped, the stub taller than 1 mm. 0: not clipped, or the offcut went 10 cm from the board."""
-    if not _finite(objects) or not STATE["cut"] or STATE["flew"] or offcut_distance(objects) > FLY_DIST:
+    """1.0: success. 0.75: clipped flush, the offcut lies still on the mat, let go. 0.5: clipped flush, the offcut
+    anywhere else (in a gripper, on the board, moving). 0.25: clipped, the stub taller than 1 mm. 0: not clipped, or
+    the offcut was ever in free flight (more than 10 cm from the board, no gripper holding it)."""
+    if not _finite(objects) or not STATE["cut"] or STATE["flew"] or free(objects):
         return 0.0
     if STATE["cut"] != "flush":
         return 0.25
     top = objects["lead_top"]
-    if top.resting():
+    if top.resting() and not STATE["touch"]:
         if in_cup(top):
             return 1.0
         if on_mat(top):
@@ -328,6 +355,7 @@ L_OPEN = -0.012  # the left grip's opening for the descent: 2.4 cm
 SLIDE = 0.04  # m: the nippers slide on 4 cm along the jaws to the lead
 BACK = 0.06
 GRASP_Z = Z_BT + 0.008 + 0.013  # the left pads' tips 8 mm above the board, over the lead's upper piece
+CARRY_UP = 0.10  # m: the left hand lifts the held offcut this far over where it grasped it (past 10 cm from the board)
 LEAN = 0.0015  # m: the right TCP is sent this far below the nippers resting on the board
 CLEAR = 0.0015  # m: the nippers' feet slide this far above the board
 TRIM = (0.0035, 0.0)  # m: the held nippers are aimed this far on (cutter frame x, y): in the hand they sit that far off (tuned)
@@ -365,7 +393,7 @@ def demo():
     t_clear = sum(s.duration for s in right[:11])  # the jaws are open again
     lx, ly = LEAD_XY
     cx, cy = CUP_XY
-    carry_z = Z_BT + 0.008 + 0.013 + 0.06  # the pads' tips well above the cup's rim
+    carry_z = Z_BT + 0.008 + 0.013 + CARRY_UP  # the pads' tips well above the cup's rim: the offcut goes past 10 cm, held
     drop_z = CUP_RIM + 0.012 + 0.013 + 0.0
     t_ready = 2.5 + 1.5 + 0.8
     left = [
