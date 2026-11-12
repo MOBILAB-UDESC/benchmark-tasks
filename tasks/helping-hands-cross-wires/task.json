@@ -17,6 +17,6 @@
   "run_limit": "600 steps (30 seconds at 20 Hz)",
   "reset_notes": "Fold both arms back to the start (each bar's angle as in the setup, clip hinges and wire ends at the listed places) and push each wire fully into its clip. Hinges keep any position, so a rerun needs the arms put back.",
   "fidelity": "Rigid bodies, 240 Hz physics, 20 Hz control. Bars, bases and wires collide as boxes. Each hinge is a vertical PhysX revolute joint with dry friction made of a velocity drive aimed at 0 whose force is capped at 0.10 N m. Real helping hands use ball joints: here the arm moves only in the horizontal plane. The wire is a rigid 5 mm box on a fixed joint that breaks at 2 N. Wire contact is read from the PhysX contact data every substep. Finger distance is read from collision meshes.",
-  "scores": "Dream-1 was not run on this version. Demo: 1.0 (success at step 340)",
+  "scores": "Dream-1: 0.0 (ran to the step limit without finishing). Demo: 1.0 (success at step 340)",
   "media": "M-CVSKZM"
 }

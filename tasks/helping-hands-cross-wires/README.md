@@ -36,7 +36,7 @@ reads only the fixed layout (a start that never changes with `object_jitter=0`) 
   to the end. The reported separation is 0.3 to 0.8 mm, not 0 or less: the chain of friction hinges sags a fraction of
   a millimetre, so the left wire hangs a little above the right one's top face instead of pressing on it. That is why
   touching is defined as 1 mm or less.
-- **Dream-1:** not run on this version (the earlier 0.0 belonged to the version with an 8 mm height difference).
+- **Dream-1:** 0.0 on this version (ran to the step limit without finishing).
 - **Ablations (variants set with `scripts/task-ablate.sh`):**
   - `WIRE_PITCH=0.008` (the earlier layout, wire centres 8 mm apart in height, the same demo): scores 0.5, not 1.0: the
     wires are 3 mm apart in height, so they never touch.
