@@ -117,8 +117,8 @@ inspect-robots run --embodiment yam_arena --policy yam_scripted \
     snaps at about 0.6 N m (4.5 degrees), no cycle ever counted. It scores 0.
   - `ROCKS = 0`: the demo's sweep on the still-stuck leaf, with no rocking. The fingertip push takes the leaf to 3.6 degrees and
     snaps it, so it scores 0.
-- Dream-1 has been run (1,200 steps, the command above): it scored 0.0. The right hand hovers at the hinge and nudges it;
-  the leaf is never swung open.
+- Dream-1 has been run on this version (1,200 steps, the command above): it scored 0.0 and ran to the step limit. Both
+  arms lift, draw back near their bases and stay there; neither reaches the hinge, and the leaf stays at 0 degrees.
 - Videos: `inspect-robots video ~/yam-eval/free-printed-hinge-demo/<log>.json` writes one MP4 per camera next to the frames.
 - Offline checks: `python -m pytest -q test_free_printed_hinge.py`.
 
