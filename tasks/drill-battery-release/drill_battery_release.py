@@ -34,7 +34,9 @@ from yam_arena.task_file import TABLE_TOP, Box  # noqa: E402
 
 SCENE = "station"
 TOP = TABLE_TOP[SCENE]
-SUCCESS_HOLD_S = 1.0
+SUCCESS_HOLD_S = 0.0  # success() itself needs every full-success condition held STILL_S without a break (timed below)
+STILL_S = 1.0  # s: the placed, let-go, still pack must stay so this long, timed every control step
+CONTROL_HZ = 20  # the control rate the task is run at, for offline checks (a run reads its own step time)
 
 # -- the drill -------------------------------------------------------------------------------------------------------
 # The SimReady drill stands upright in its file: chuck along +x, its left side +y, handle down to the battery at
@@ -159,14 +161,17 @@ RELATCH = 0.002  # m: buttons let go within this of the seat, the lock clicks ba
 _drill_centre = on_drill((np.asarray(DRILL_LOW) + np.asarray(DRILL_HIGH)) / 2)
 START = {"drill": np.asarray(_drill_centre), "drill_quat": np.asarray(DRILL_QUAT), "battery": np.asarray(BATTERY_START)}
 
-# What the episode remembers: both buttons were pressed together at some step, the pack has slid off its foot, and
-# whether every finger was clear of the pack at the last step (from on_step: nothing is clear until a step has run).
-STATE = {"squeezed": False, "off": False, "released": False}
+# What the episode remembers: both buttons were pressed together at some step, the pack has slid off its foot,
+# whether every finger was clear of the pack at the last step (from on_step: nothing is clear until a step has run),
+# and how long every full-success condition has held without a break (s, timed at each control step; any lapse,
+# such as a finger touching the pack again or the pack moving, sets it back to 0).
+STATE = {"squeezed": False, "off": False, "released": False, "placed_s": 0.0}
 
 
 @on_reset
 def reset_memory(env=None) -> None:
     STATE["squeezed"] = STATE["off"] = STATE["released"] = False
+    STATE["placed_s"] = 0.0
     if env is not None:
         from yam_arena.scene import object_states
 
@@ -272,9 +277,10 @@ def work_the_lock(env) -> None:
 
     objects = object_states(env, ["drill", "battery", *BUTTON_NAMES])
     if not _finite(objects):
+        STATE["placed_s"] = 0.0
         return
     STATE["released"] = finger_gap(objects, finger_points(env)) >= RELEASED_GAP
-    _remember(objects)
+    tick(objects, _step_s(env))
     if STATE["off"]:
         return
     s = slide(objects)
@@ -293,26 +299,47 @@ def _done(objects) -> bool:
                 and objects["battery"].resting())
 
 
+def _met(objects) -> bool:
+    """Every full-success condition as things stand: squeezed at some step, the pack off the drill, let go by every
+    finger, lying still on the tray's floor inside its walls, the drill within 10 cm of its start, no violation."""
+    return bool(not _violation(objects) and STATE["squeezed"] and _done(objects)
+                and drill_moved(objects) < DRILL_KEPT)
+
+
+def _step_s(env) -> float:
+    """The control step (s) of a run, 1 / CONTROL_HZ when the env does not say."""
+    dt = getattr(getattr(env, "unwrapped", env), "step_dt", None)
+    return float(dt) if dt else 1.0 / CONTROL_HZ
+
+
+def tick(objects, dt: float) -> None:
+    """Once per control step (from the step hook): add the step to the time every full-success condition has held
+    without a break, or start the count over when one fails."""
+    _remember(objects)
+    STATE["placed_s"] = STATE["placed_s"] + dt if _met(objects) else 0.0
+
+
 def success(objects) -> bool:
-    """The pack is off the drill, let go by every finger, lies still on the tray's floor inside its walls, and the
-    drill is within 10 cm of its start."""
+    """Every full-success condition (``_met``) holds now and has held without a break for STILL_S (1 s, 20 control
+    steps), timed by the step hook: the pack off the drill, let go, still on the tray's floor inside its walls."""
     if _violation(objects):
         return False
     _remember(objects)
-    return bool(STATE["squeezed"] and _done(objects) and drill_moved(objects) < DRILL_KEPT)
+    return bool(_met(objects) and STATE["placed_s"] >= STILL_S - 1e-6)
 
 
 def score(objects) -> float:
-    """1.0: success. 0.5: the pack is off the drill (5 cm or more from its seat) but not placed (held, in the air,
-    on the table, leaning, or still moving), or it is placed but the drill moved 10 cm or more. 0.25: both buttons have been pressed together at some step
-    and the pack has slid 1 cm or more along the handle. 0 otherwise, and 0 if the drill or the pack fell off the
-    table."""
+    """1.0: success (placed, let go and still for 1 s without a break). 0.5: the pack is off the drill (5 cm or more
+    from its seat) but not placed (held, in the air, on the table, leaning, still moving, or placed for less than
+    1 s), or it is placed but the drill moved 10 cm or more. 0.25: both buttons have been pressed together at some
+    step and the pack has slid 1 cm or more along the handle. 0 otherwise, and 0 if the drill or the pack fell off
+    the table."""
     if _violation(objects):
         return 0.0
     _remember(objects)
     if not STATE["squeezed"]:
         return 0.0
-    if _done(objects) and drill_moved(objects) < DRILL_KEPT:
+    if success(objects):
         return 1.0
     if separation(objects) >= SEPARATED:
         return 0.5

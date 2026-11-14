@@ -66,6 +66,17 @@ def _let_go(released=True):
     T.STATE["released"] = released
 
 
+STEP_S = 1.0 / T.CONTROL_HZ
+HOLD_STEPS = round(T.STILL_S * T.CONTROL_HZ)  # 20 control steps: 1 s at 20 Hz
+
+
+def _hold(objects, steps=HOLD_STEPS):
+    """What the step hook does each control step for ``steps`` steps in this state: time the full-success state."""
+    for _ in range(steps):
+        T.tick(objects, STEP_S)
+    return objects
+
+
 @pytest.fixture(autouse=True)
 def fresh_episode():
     T.reset_memory()
@@ -170,8 +181,76 @@ def test_in_tray_succeeds():
         T.reset_memory()
         T.score(_scene(pressed=SQUEEZE))
         _let_go()
-        objects = _scene(IN_TRAY, pack_quat=quat)
+        objects = _hold(_scene(IN_TRAY, pack_quat=quat))
         assert T.success(objects) and T.score(objects) == 1.0
+
+
+def test_full_score_needs_one_second_without_a_break():
+    """Placed, let go and still: 0.5 until the state has held 1 s (20 control steps) without a break, then 1.0. Any
+    lapse (a finger back on the pack, the pack moving) starts the second over."""
+    T.score(_scene(pressed=SQUEEZE))
+    _let_go()
+    placed = _scene(IN_TRAY)
+    assert not T.success(placed) and T.score(placed) == 0.5  # placed, but not timed at all yet
+    _hold(placed, HOLD_STEPS - 1)
+    assert not T.success(placed) and T.score(placed) == 0.5
+    _hold(placed, 1)
+    assert T.success(placed) and T.score(placed) == 1.0
+    _let_go(False)  # a finger touches the pack again
+    _hold(placed, 1)
+    _let_go(True)
+    _hold(placed, HOLD_STEPS - 1)
+    assert not T.success(placed) and T.score(placed) == 0.5
+    _hold(_scene(_state(IN_TRAY, vel=(0.02, 0.0, 0.0))), 1)  # a nudge: it moves for one step
+    _hold(placed, HOLD_STEPS - 1)
+    assert T.score(placed) == 0.5
+    _hold(placed, 1)
+    assert T.score(placed) == 1.0
+    T.reset_memory()
+    assert T.STATE["placed_s"] == 0.0
+
+
+def test_no_full_score_while_any_condition_is_missing():
+    """Each full-success condition missing in turn, held far longer than 1 s: never 1.0."""
+    tilt = np.array([[1.0, 0.0, 0.0], [0.0, math.cos(0.4), -math.sin(0.4)], [0.0, math.sin(0.4), math.cos(0.4)]])
+    wall_x = T.TRAY_XY[0] + T.TRAY_OUTER[0] / 2 - T.TRAY_WALL
+    cases = {
+        "not squeezed": (False, True, _scene(IN_TRAY)),
+        "not let go": (True, False, _scene(IN_TRAY)),
+        "held above the floor": (True, True, _scene((*IN_TRAY[:2], IN_TRAY[2] + 0.01))),
+        "tilted": (True, True, _scene(_state(IN_TRAY, _quat_from_matrix(tilt)))),
+        "over a wall": (True, True, _scene((wall_x, T.TRAY_XY[1], IN_TRAY[2]))),
+        "moving": (True, True, _scene(_state(IN_TRAY, vel=(0.02, 0.0, 0.0)))),
+        "drill moved": (True, True, _scene(IN_TRAY, drill=DRILL0 + (0.0, -0.11, 0.0))),
+        "still on the drill": (True, True, _scene(PACK0 + 0.02 * OUT)),
+    }
+    for name, (squeezed, released, objects) in cases.items():
+        T.reset_memory()
+        if squeezed:
+            T.score(_scene(pressed=SQUEEZE))
+        _let_go(released)
+        _hold(objects, 5 * HOLD_STEPS)
+        assert not T.success(objects) and T.score(objects) < 1.0, name
+
+
+def test_step_hook_times_the_second(monkeypatch):
+    """work_the_lock times the full-success state with the run's own control step."""
+    import sys
+    import types
+
+    import fingers
+
+    T.score(_scene(pressed=SQUEEZE))
+    objects = _scene(IN_TRAY)
+    monkeypatch.setitem(sys.modules, "yam_arena.scene", types.SimpleNamespace(object_states=lambda env, n: objects))
+    monkeypatch.setattr(T, "joint_enabled", lambda *a: True)
+    monkeypatch.setattr(T, "set_joint", lambda *a: None)
+    monkeypatch.setattr(fingers, "finger_points", lambda env: np.asarray([objects["battery"].pos + (0.0, 0.2, 0.0)]))
+    env = types.SimpleNamespace(unwrapped=types.SimpleNamespace(step_dt=0.05))
+    for k in range(HOLD_STEPS):
+        assert T.score(objects) == 0.5, k
+        T.work_the_lock(env)
+    assert T.success(objects) and T.score(objects) == 1.0
 
 
 def test_in_tray_without_a_squeeze_zero():
@@ -213,6 +292,7 @@ def test_in_tray_but_still_gripped_half():
     objects = _scene(IN_TRAY)
     assert not T.success(objects) and T.score(objects) == 0.5
     _let_go(True)
+    _hold(objects)
     assert T.success(objects) and T.score(objects) == 1.0
 
 
@@ -243,7 +323,7 @@ def test_on_its_side_in_the_tray_succeeds():
     _let_go()
     quat = _quat_from_matrix(np.array([[0.0, 0.0, 1.0], [0.0, 1.0, 0.0], [-1.0, 0.0, 0.0]]))
     pack = _state((*T.TRAY_XY, T.TRAY_FLOOR_Z + T.BATTERY_SIZE[0] / 2), quat)
-    assert T.success(_scene(pack))
+    assert T.success(_hold(_scene(pack)))
 
 
 def test_on_a_wall_or_over_it_half():
@@ -257,9 +337,9 @@ def test_on_a_wall_or_over_it_half():
     assert not T.success(beside) and T.score(beside) == 0.5
     edge = wall_x - T.BATTERY_SIZE[0] / 2  # the pack's far end just touching the inner face of the wall
     snug = _scene((edge - 0.0005, T.TRAY_XY[1], IN_TRAY[2]))
-    assert T.success(snug)
+    assert T.success(_hold(snug))
     over = _scene((edge + 0.004, T.TRAY_XY[1], IN_TRAY[2]))
-    assert not T.success(over)
+    assert not T.success(_hold(over))
 
 
 def test_finger_gap():
@@ -304,8 +384,8 @@ def test_in_tray_but_drill_moved_half():
     T.score(_scene(pressed=SQUEEZE))
     _let_go()
     moved = _scene(IN_TRAY, drill=DRILL0 + (0.0, -0.11, 0.0))
-    assert not T.success(moved) and T.score(moved) == 0.5
-    kept = _scene(IN_TRAY, drill=DRILL0 + (0.0, -0.09, 0.0))
+    assert not T.success(_hold(moved)) and T.score(moved) == 0.5
+    kept = _hold(_scene(IN_TRAY, drill=DRILL0 + (0.0, -0.09, 0.0)))
     assert T.success(kept) and T.score(kept) == 1.0
 
 

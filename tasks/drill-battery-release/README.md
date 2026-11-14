@@ -98,16 +98,41 @@ taken with the drill as it now lies (the drill's start, moved and turned the way
   within 1.5 mm of the floor (6 mm above the table top), so one flat face is down. A pack held up, leaning on a wall,
   or resting on a wall's top is not placed.
 - **1.0 (success, held 1 s):** the pack off the drill (its centre 5 cm or more from its seat), let go, placed, and
-  still (under 1 cm/s and 0.5 rad/s), and the drill's centre within 10 cm of its start in the plane of the table.
-- **0.5:** the pack off the drill but not placed, let go and still (held in the hand, held in the air over the tray,
-  set down on the table, leaning, or still moving), or placed with the drill moved 10 cm or more.
+  still (under 1 cm/s and 0.5 rad/s), and the drill's centre within 10 cm of its start in the plane of the table,
+  all of it holding without a break for 1 s (20 control steps). The second is timed in the task file: the step hook
+  (`work_the_lock`, every control step) adds the step to `STATE["placed_s"]` while every condition holds and sets it
+  back to 0 the moment one fails (a finger back on the pack, the pack moving, sliding off the floor). `success()`
+  and `score()` return 1.0 only once that second is complete; `SUCCESS_HOLD_S` is 0, so the run ends on that step.
+- **0.5:** the pack off the drill but not let go, placed and still for 1 s (held in the hand, held in the air over
+  the tray, set down on the table, leaning, still moving, or placed for less than 1 s), or placed with the drill
+  moved 10 cm or more.
 - **0.25:** the pack slid 1 cm or more along the handle, away from its seat, but still on the drill.
 - **0** otherwise, including doing nothing, squeezing without sliding, pulling the pack without squeezing (the lock
   holds), and dragging the drill along with its pack (the pack hasn't slid on the handle).
 
 In a real trial, a tape measure gives the pack's distance from the handle's foot and the drill's distance from its
-start, and a photo shows the pack lying flat on the tray's floor with nothing touching it (a 3 mm gap between each pad and
-the pack). The squeeze is seen in the video (both buttons in at once).
+start. Placed is checked by hand after the run: the pack lies flat on the tray's floor (a 1.5 mm feeler gauge does not
+slide under any of its four bottom corners) and no corner is over or on a wall. Let go and still are read from the
+video (30 fps or more): the gripper opens and moves away, leaving at least a 3 mm gap between each pad and the pack,
+and the pack does not move for 1 s (30 frames) afterwards. The squeeze is seen in the video (both buttons in at once).
+
+## Revision notes
+
+The first review asked: "Revise the full-score predicate so the pack must be released, resting on the tray floor,
+and fully inside the tray walls; retain partial credit for a removed pack that has not been placed successfully."
+
+- Released: every point of every gripper finger at least 3 mm from the pack and its buttons, measured each control
+  step from the finger collision meshes (`fingers.py`, `finger_gap`, `work_the_lock`).
+- Resting on the tray floor: the pack's four lowest corners within 1.5 mm of the floor, so a flat face is down and a
+  pack held up, leaning on a wall or resting on a wall's top is not placed (`in_tray`).
+- Fully inside the walls: all eight corners of the pack inside the tray's inner walls (`in_tray`).
+- Still for 1 s: the released, placed, still state must hold without a break for 1 s, timed every control step in the
+  task file (`tick`, `success`); any lapse restarts the second, so `score()` cannot return 1.0 earlier.
+- Partial credit kept: a removed pack that is not placed (held, in the air, on the table, leaning, moving, or placed
+  for less than 1 s) scores 0.5; a pack slid 1 cm along the handle scores 0.25.
+- Tests: `test_still_above_the_floor_is_not_full_credit` (the reviewers' exploit), `test_in_tray_but_still_gripped_half`,
+  `test_full_score_needs_one_second_without_a_break` and `test_no_full_score_while_any_condition_is_missing` (each
+  full-success condition missing in turn, held 5 s: never 1.0).
 
 ## Sizes
 
