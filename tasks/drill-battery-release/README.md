@@ -68,11 +68,12 @@ inspect-robots run --embodiment yam_arena --policy yam_scripted \
   y = 0.056 and carries it to the tray on the left. The two grippers stay 19 cm or more apart.
 - The demo: the right arm comes straight down with its fingers closing along x round the drill's clutch ring and
   holds it. The left arm comes down over the pack with its fingers closing across it, which presses both buttons
-  (2.4 to 2.6 mm in), pulls 7 cm along the handle toward the robot (the pack comes off its foot after 4 cm), lifts it,
-  carries it to the tray, lowers it and lets go. The right arm lets go of the drill once the pack is up. It reaches 1.0
-  and ends on success at step 258 (12.9 s at 20 Hz), with every finger at least 3 mm from the pack and the pack flat on
-  the tray's floor. The drill moves about 2 mm. A trial takes about 90 s on an L40S,
-  including startup.
+  (2.3 to 2.7 mm in), pulls 7 cm along the handle toward the robot (the pack comes off its foot after 4 cm), lifts it,
+  carries it to the tray, lowers it and lets go. The right arm lets go of the drill once the pack is up. As the
+  fingers open, the pack, held slightly tilted with one edge on the floor, settles flat on the tray's floor; every
+  condition for full score holds from step 239 (11.95 s, every finger 3.1 mm from the pack), and the run reaches 1.0
+  and ends on success at step 258 (12.9 s at 20 Hz), 1 s later, with every finger 44 mm from the pack. The drill moves
+  at most 4 mm (2.5 mm at the end). A trial takes about 90 s on an L40S, including startup.
 - The same demo with the right arm staying up instead of holding the drill (`HOLD = False`) scores 0: the pack's
   friction on the handle drags the loose drill along, the left arm lifts the drill with the pack still on it and
   sets both down on the tray, and the pack never slides off the handle.
