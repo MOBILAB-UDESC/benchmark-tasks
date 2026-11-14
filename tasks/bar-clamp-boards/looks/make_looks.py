@@ -2,16 +2,12 @@
 
     blender -b -P looks/make_looks.py          (Blender 4.2 or later, from the task folder)
 
-The physics stays the task file's boxes (the clamp is three boxes, built by ``bonds.py``). Each look is a render-only
-mesh that ``looks.py`` puts on one of those boxes, whose plain cuboid is then hidden but still sets its bounds. Every
-look is built in its box's own frame, around the box's centre (metres, z up), and checked to stay inside the box when
-it is exported.
+The physics stays the task file's boxes. Each look is a render-only mesh that ``looks.py`` puts on one of those boxes,
+whose plain cuboid is then hidden but still sets its bounds. Every look is built in its box's own frame, around the
+box's centre (metres, z up), and checked to stay inside the box when it is exported. (The clamp is drawn as its own
+collision boxes, coloured, by ``bonds.py``.)
 
-- ``clamp.usdc``: the red mini bar clamp's body: a 9 cm steel bar, the fixed jaw with its black pad, and the handle
-  with its black grip, drawn from the clamp's O (the bar's axis at the fixed jaw's face).
-- ``jaw.usdc``: the red sliding jaw: a collar round the bar, its arm and its black pad.
-- ``board_bottom.usdc``, ``board_top.usdc``: pine boards, 20 x 10 x 1.8 cm, with their grain and end grain.
-- ``spacer.usdc``: a walnut spacer block, 4 x 10 x 3 cm.
+- ``board_right.usdc``, ``board_left.usdc``: pine boards, 20 x 6 x 1.8 cm, with their grain and end grain.
 - ``mat.usdc``: the dark grey rubber work mat with a faint 1 cm grid.
 
 Textures are drawn here with numpy and saved in ``textures/``. Nothing is downloaded. Everything this script makes in
@@ -31,22 +27,8 @@ TEX = os.path.join(HERE, "textures")
 P = "bar-clamp-boards__"
 
 # -- the task file's sizes (bar_clamp_boards.py), metres ---------------------------------------------------------------
-BOARD = (0.20, 0.10, 0.018)
-SPACER = (0.04, 0.10, 0.03)
+BOARD = (0.20, 0.060, 0.018)
 MAT = (0.40, 0.46, 0.003)
-CLAMP_LOW, CLAMP_HIGH = (-0.015, -0.096, -0.020), (0.015, 0.110, 0.090)  # the clamp's box from its O
-JAW_OPEN = 0.060
-JW = 0.016  # the sliding jaw's half width
-JAW_LOW, JAW_HIGH = (-JW, -0.096, JAW_OPEN), (JW, 0.015, JAW_OPEN + 0.020)
-BAR_HALF = (0.004, 0.010)  # the bar's half sizes, x and y
-
-
-def _centre(lo, hi):
-    return tuple((a + b) / 2 for a, b in zip(lo, hi))
-
-
-def _size(lo, hi):
-    return tuple(b - a for a, b in zip(lo, hi))
 
 
 def linear(c):
@@ -146,15 +128,10 @@ def mat_texture():
 
 def materials():
     return {
-        "red": material("clamp_red", (0.80, 0.08, 0.06), 0.45),
-        "black": material("rubber", (0.04, 0.04, 0.045), 0.85),
-        "steel": material("steel", (0.62, 0.63, 0.65), 0.32, metal=1.0),
         "pine_a": material("pine_a", (0.86, 0.70, 0.46), 0.7,
                            image=wood_texture("pine_a", 11, (0.90, 0.75, 0.52), (0.72, 0.50, 0.28))),
         "pine_b": material("pine_b", (0.86, 0.70, 0.46), 0.7,
                            image=wood_texture("pine_b", 23, (0.89, 0.74, 0.50), (0.70, 0.48, 0.26))),
-        "walnut": material("walnut", (0.30, 0.19, 0.11), 0.6,
-                           image=wood_texture("walnut", 31, (0.36, 0.23, 0.13), (0.18, 0.10, 0.05), rings=22.0)),
         "mat": material("mat", (0.15, 0.15, 0.15), 0.9, image=mat_texture()),
     }
 
@@ -213,82 +190,13 @@ def bm_box(lo, hi, uv_scale=None):
     return bm
 
 
-def bm_prism(pts, a0, a1, axis="Y"):
-    """A polygon extruded along an axis. ``pts`` are (u, v) across the axis: (x, z) for Y, (y, z) for X."""
-    def co(u, v, a):
-        return {"Y": (u, a, v), "X": (a, u, v), "Z": (u, v, a)}[axis]
-    bm = bmesh.new()
-    lo = [bm.verts.new(co(u, v, a0)) for u, v in pts]
-    hi = [bm.verts.new(co(u, v, a1)) for u, v in pts]
-    bm.faces.new(lo)
-    bm.faces.new(hi)
-    n = len(pts)
-    for i in range(n):
-        bm.faces.new((lo[i], lo[(i + 1) % n], hi[(i + 1) % n], hi[i]))
-    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
-    return bm
-
-
-def rounded_rect(u0, v0, u1, v1, r, n=4):
-    pts = []
-    for cu, cv, a0 in ((u1 - r, v0 + r, -90), (u1 - r, v1 - r, 0), (u0 + r, v1 - r, 90), (u0 + r, v0 + r, 180)):
-        for i in range(n + 1):
-            a = math.radians(a0 + 90 * i / n)
-            pts.append((cu + r * math.cos(a), cv + r * math.sin(a)))
-    return pts
-
-
 # -- the looks ---------------------------------------------------------------------------------------------------------
-
-
-def build_clamp(M):
-    """The clamp's body, drawn from its O: jaws toward -y, handle toward +y."""
-    L = Look("clamp", _centre(CLAMP_LOW, CLAMP_HIGH), _size(CLAMP_LOW, CLAMP_HIGH))
-    bx, by = BAR_HALF
-    L.mesh("bar", bm_box((-bx, -by, -0.004), (bx, by, 0.086)), M["steel"], bevel=0.0008)
-    L.mesh("bar_stop", bm_box((-0.006, -0.012, 0.086), (0.006, 0.012, 0.090)), M["black"], bevel=0.001)
-    # the fixed jaw: a red arm with a black pad on its face near the tip
-    L.mesh("fixed_jaw", bm_box((-0.012, -0.096, -0.020), (0.012, 0.012, -0.002)), M["red"], bevel=0.0015)
-    L.mesh("fixed_jaw_web", bm_box((-0.012, -0.040, -0.002), (0.012, 0.012, 0.0)), M["red"], bevel=0.0005)
-    L.mesh("fixed_pad", bm_box((-0.012, -0.095, -0.003), (0.012, -0.040, 0.0)), M["black"], bevel=0.0008)
-    # the handle: a red housing behind the bar with a black rubber grip
-    L.mesh("handle_housing", bm_box((-0.015, 0.010, -0.020), (0.015, 0.035, 0.010)), M["red"], bevel=0.002)
-    grip = rounded_rect(-0.0145, -0.020, 0.0145, 0.010, 0.006)
-    L.mesh("handle_grip", bm_prism(grip, 0.035, 0.106, "Y"), M["black"], bevel=0.001)
-    L.mesh("handle_cap", bm_prism(rounded_rect(-0.014, -0.019, 0.014, 0.009, 0.006), 0.106, 0.110, "Y"), M["red"])
-    for i in range(6):  # the grip's ribs
-        y = 0.042 + i * 0.011
-        L.mesh(f"grip_rib_{i}", bm_box((-0.0150, y, -0.016), (0.0150, y + 0.003, 0.006)), M["red"])
-    return L
-
-
-def build_jaw(M):
-    """The sliding jaw, drawn from the clamp's O at its starting height: a collar round the bar and the arm."""
-    L = Look("jaw", _centre(JAW_LOW, JAW_HIGH), _size(JAW_LOW, JAW_HIGH))
-    z0, z1 = JAW_LOW[2], JAW_HIGH[2]
-    hx, hy = BAR_HALF[0] + 0.0008, BAR_HALF[1] + 0.0008  # the collar's hole round the bar
-    for name, lo, hi in (("collar_back", (-JW, hy, z0), (JW, 0.015, z1)),
-                         ("collar_left", (hx, -hy, z0), (JW, hy, z1)),
-                         ("collar_right", (-JW, -hy, z0), (-hx, hy, z1))):
-        L.mesh(name, bm_box(lo, hi), M["red"], bevel=0.001)
-    L.mesh("arm", bm_box((-JW, -0.096, z0 + 0.003), (JW, -hy, z1)), M["red"], bevel=0.0015)
-    L.mesh("pad", bm_box((-JW, -0.095, z0), (JW, -0.040, z0 + 0.003)), M["black"], bevel=0.0008)
-    L.mesh("arm_front", bm_box((-JW, -0.040, z0), (JW, -hy, z0 + 0.003)), M["red"])
-    L.mesh("thumb_pad", bm_box((-JW + 0.003, -0.092, z1 - 0.0012), (JW - 0.003, -0.074, z1)), M["black"], bevel=0.0004)
-    return L
 
 
 def build_board(M, name, mat):
     L = Look(name, (0.0, 0.0, 0.0), BOARD)
     h = [s / 2 for s in BOARD]
     L.mesh("board_" + name, bm_box([-v for v in h], h, uv_scale=0.21), mat, bevel=0.0012)
-    return L
-
-
-def build_spacer(M):
-    L = Look("spacer", (0.0, 0.0, 0.0), SPACER)
-    h = [s / 2 for s in SPACER]
-    L.mesh("spacer", bm_box([-v for v in h], h, uv_scale=0.12), M["walnut"], bevel=0.0015)
     return L
 
 
@@ -365,8 +273,7 @@ def build(keep=False):
     """Build and export every look. ``keep`` leaves them in the Blender scene to look at, otherwise they are removed."""
     clear()
     M = materials()
-    looks = [build_clamp(M), build_jaw(M), build_board(M, "board_bottom", M["pine_a"]),
-             build_board(M, "board_top", M["pine_b"]), build_spacer(M), build_mat(M)]
+    looks = [build_board(M, "board_right", M["pine_a"]), build_board(M, "board_left", M["pine_b"]), build_mat(M)]
     out = {look.name: export(look) for look in looks}
     if not keep:
         clear()

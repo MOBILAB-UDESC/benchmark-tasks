@@ -1,22 +1,25 @@
-"""On the station table, on a dark rubber work mat (40 x 46 cm, 3 mm): two pine boards (20 x 10 x 1.8 cm, 180 g each)
-lie stacked face to face, edges aligned, on two fixed walnut spacers (4 x 10 x 3 cm) under their ends, so the
-middle of the stack overhangs a 3 cm gap. The stack lies along x at (0.36, -0.12). A red mini bar clamp (130 g)
-stands upright on its foot to the stack's left, its jaws pointing at the stack's long edge: a steel bar 11 cm tall, a
-red fixed jaw at its foot (10.6 cm long, 2 cm thick, its face 1 cm below the stack's underside) with a red and black
-handle (10 cm) behind the bar, and a red sliding jaw (30 g) on the bar, its face 6 cm above the fixed jaw's. The
-sliding jaw rides a one-way ratchet: pushed down toward the fixed jaw (about 1 N for each 0.1 mm click), it holds
-wherever it is put and never slides back. The fixed jaw's black rubber pad is a spring (40 N per mm, 3 mm of travel): it
-stands for the bar's flex and the pads' rubber, and its compression is the clamping force. A rubber mallet and a steel
-speed square lie at the far corners, fixed.
+"""On the station table, on a dark rubber work mat (46 x 40 cm, 3 mm): two pine boards (20 x 6 x 1.8 cm, 108 g each)
+lie flat side by side, their long edges 2 mm apart, ready to be glued edge to edge into a 12.2 cm wide panel. They lie
+along x at (0.429, -0.059). A red one-hand bar clamp (a 6 in mini clamp, 0.32 kg) lies flat on the mat just in front
+of the panel, its bar across the panel (along y), its jaws open 14 cm and pointing away from the robot at the panel's
+near end, its pistol grip and trigger pointing at the robot. The clamp is a handle (a housing round the bar with
+the fixed jaw on its front and the pistol grip below), a trigger hinged in the housing in front of the grip, and a
+steel bar that slides through the housing with the moving jaw on its far end. Squeezing the trigger toward the grip
+drives the bar through the housing by up to 3.5 mm, and a brake holds it there; let go, the trigger springs back
+and the next squeeze drives the bar on. The fixed jaw's black rubber pad is a spring (40 N per mm, 3 mm of travel)
+that stands for the jaws' and the bar's flex and the pads' rubber: its compression is the clamping force. A rubber
+mallet and a steel speed square lie at the far corners, fixed.
 
-The task: put the bar clamp over the two stacked boards and push its sliding jaw down until both jaws grip the stack
-with a clamping force of 20 N or more, then let go. The clamp must hang on the boards by itself, holding that force.
+The task: clamp the two boards together, edge to edge, with the bar clamp: its jaws on the panel's outer edges, the
+joint between the boards closed, and a clamping force of 20 N or more, then let go of the clamp.
 
-The left arm holds the clamp by its handle, slides its fixed jaw under the overhang and lifts it against the bottom
-board. The right arm pushes the sliding jaw down onto the top board. Each arm works in its own half of the table.
-``bonds.py`` makes the clamp (one rigid body of four boxes), the ratchet and the pad's spring, ``fingers.py`` reads where the fingers
-are (to know the clamp was let go), ``simready.py`` places the mallet and the square, and ``looks.py`` dresses the
-boxes in the Blender meshes of ``looks/``.
+The scripted demo: the right arm grips the clamp's pistol grip and trigger together, slides the clamp so its jaws go
+round the panel's near end, and pumps the trigger, stroke by stroke, until the jaws press the boards together; the left
+arm holds its wrist camera over the panel's near end and touches nothing. ``bonds.py`` makes the
+clamp's bodies and joints (the handle, the hinged trigger, the sliding bar and the pad's spring) and the trigger's
+one-way drive on the bar, ``fingers.py`` reads where the fingers are (to know the clamp and the boards were let go),
+``simready.py`` places the mallet and the square, and ``looks.py`` dresses the mat and the boards in the Blender
+meshes of ``looks/``.
 
 Run it:  inspect-robots run --embodiment yam_arena -E task=bar_clamp_boards.py --scorer task_score ...
 """
@@ -24,6 +27,7 @@ Run it:  inspect-robots run --embodiment yam_arena -E task=bar_clamp_boards.py -
 from __future__ import annotations
 
 import math
+import os
 import pathlib
 import sys
 
@@ -31,7 +35,9 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 import numpy as np  # noqa: E402
 from simready import SimReady  # noqa: E402  (before bonds: its hook on task_object then runs after bonds')
-from bonds import Compound, Ratchet, on_reset, on_step, set_upper, upper  # noqa: E402
+from bonds import (  # noqa: E402
+    Compound, Hinge, Ratchet, Slide, low, on_reset, on_spawn, on_step, one_way, set_low, set_upper, upper,
+)
 from looks import dress  # noqa: E402
 from yam_arena.constants import PAD_TIP_PAST_TCP  # noqa: E402
 from yam_arena.demo import FINGER_CLOSED, FINGER_OPEN, Waypoint  # noqa: E402
@@ -39,119 +45,167 @@ from yam_arena.task_file import TABLE_TOP, Box  # noqa: E402
 
 SCENE = "station"
 TOP = TABLE_TOP[SCENE]
-SUCCESS_HOLD_S = 1.0  # the clamp hangs on the boards, let go, for 1 s
+SUCCESS_HOLD_S = 0.0  # success() itself needs every full-success condition held for HOLD_S: the run ends when it holds
+HOLD_S = 1.0  # s: every full-success condition held without a break this long
+TAG = "[bar_clamp]"
+DEBUG = False  # more log lines: where the clamp and the boards are
 
 # -- the mat ---------------------------------------------------------------------------------------------------------
-MAT_SIZE = (0.40, 0.46, 0.003)
-MAT_XY = (0.33, -0.02)
-BASE = TOP + MAT_SIZE[2]  # the mat's top: everything stands on it
-MAT = Box("mat", pos=(*MAT_XY, TOP + MAT_SIZE[2] / 2), size=MAT_SIZE, color=(0.13, 0.14, 0.15))
+MAT_SIZE = (0.40, 0.46, 0.003)  # turned a quarter turn: 46 cm along x, 40 cm along y
+MAT_XY = (0.34, -0.02)
+BASE = TOP + MAT_SIZE[2]  # the mat's top: everything lies on it
+MAT = Box("mat", pos=(*MAT_XY, TOP + MAT_SIZE[2] / 2), size=MAT_SIZE, yaw=math.pi / 2, color=(0.13, 0.14, 0.15))
+DROP = 0.0005  # m: everything free spawns this far above the mat
 
-# -- the stack: two boards on two spacers ----------------------------------------------------------------------------
-STACK_XY = (0.36, -0.12)
-BOARD_SIZE = (0.20, 0.10, 0.018)  # long (x), wide (y), thick
-BOARD_MASS = 0.18
-SPACER_SIZE = (0.04, 0.10, 0.03)
-SPACER_DX = 0.075  # m from the stack's centre: under the boards' ends, 9 cm clear between them
-DROP = 0.0005  # m: everything free spawns this far above what it rests on
-WALNUT = (0.30, 0.19, 0.11)
-SPACERS = [
-    Box(f"spacer_{side}", pos=(STACK_XY[0] + s * SPACER_DX, STACK_XY[1], BASE + SPACER_SIZE[2] / 2),
-        size=SPACER_SIZE, color=WALNUT)
-    for side, s in (("near", -1), ("far", 1))
-]
-UNDER = BASE + SPACER_SIZE[2]  # the bottom board's underside
+# -- where the clamp clamps: its origin O -----------------------------------------------------------------------------
+# O is the centre of the fixed jaw's pad face, at rest, half way up the clamp lying flat. Everything of the clamp is
+# drawn from O, in the world's axes (the clamp lies with its bar along y, its jaws toward +x). The clamp is 24 mm
+# thick lying flat, so O is 12 mm above the mat.
+CLAMP_T = 0.024
+O_CLAMPED = (0.36, -0.12, BASE + CLAMP_T / 2)
+
+# -- the boards ------------------------------------------------------------------------------------------------------
+BOARD_SIZE = (0.20, 0.060, 0.018)  # long (x), wide (y), thick
+BOARD_MASS = 0.108  # pine, 500 kg/m3
+JOINT_GAP = 0.002  # m: the boards' long edges start this far apart
+BAR_CLEAR = 0.004  # m: the clamped bar's face this far in front of the boards' near ends
 PINE = (0.86, 0.70, 0.46)
-BOARD_LOW = Box("board_bottom", pos=(*STACK_XY, UNDER + DROP + BOARD_SIZE[2] / 2), size=BOARD_SIZE,
-                mass=BOARD_MASS, color=PINE)
-BOARD_UP = Box("board_top", pos=(*STACK_XY, UNDER + 2 * DROP + 1.5 * BOARD_SIZE[2]), size=BOARD_SIZE,
-               mass=BOARD_MASS, color=PINE)
-STACK_TOP = UNDER + 2 * BOARD_SIZE[2]
-STACK_T = 2 * BOARD_SIZE[2]  # 3.6 cm
+BOARD_X = O_CLAMPED[0] - 0.035 + BAR_CLEAR + BOARD_SIZE[0] / 2  # 0.429: the boards' centre along x
+BOARD_Z = BASE + DROP + BOARD_SIZE[2] / 2
+BOARD_R = Box("board_right", pos=(BOARD_X, O_CLAMPED[1] + BOARD_SIZE[1] / 2, BOARD_Z), size=BOARD_SIZE,
+              mass=BOARD_MASS, color=PINE)
+BOARD_L = Box("board_left", pos=(BOARD_X, O_CLAMPED[1] + 1.5 * BOARD_SIZE[1] + JOINT_GAP, BOARD_Z), size=BOARD_SIZE,
+              mass=BOARD_MASS, color=PINE)
+PANEL_W = 2 * BOARD_SIZE[1] + JOINT_GAP  # 12.2 cm across, laid out
 
 # -- the clamp -------------------------------------------------------------------------------------------------------
-# Drawn from its origin O: the bar's axis at the height of the fixed jaw's face. The jaws point along -y (at the
-# stack's long edge), the handle along +y. Parts: (name, centre from O, size).
-BAR = ("bar", (0.0, 0.0, 0.045), (0.008, 0.020, 0.090))
-FIXED_JAW = ("fixed_jaw", (0.0, -0.043, -0.0115), (0.024, 0.106, 0.017))  # its face 3 mm under the pad's rest face
-SLICK = (0.35, 0.3)  # the steel jaw and the handle's nylon foot, on the mat, the boards and the pads
-GRIP = ("handle", (0.0, 0.060, -0.001), (0.030, 0.100, 0.022))  # the handle's rubber grip, from 8 mm up
-FOOT = ("foot", (0.0, 0.060, -0.016), (0.030, 0.100, 0.008), SLICK)  # under the grip, on the mat
-BAR, FIXED_JAW = (*BAR, SLICK), (*FIXED_JAW, SLICK)
-PARTS = (BAR, FIXED_JAW, GRIP, FOOT)
-CLAMP_LOW = (-0.015, -0.096, -0.020)  # the clamp's box from O: x, y, z
-CLAMP_HIGH = (0.015, 0.110, 0.090)
-O_TO_CENTRE = tuple((a + b) / 2 for a, b in zip(CLAMP_LOW, CLAMP_HIGH))  # the box's centre from O
-CLAMP_SIZE = tuple(b - a for a, b in zip(CLAMP_LOW, CLAMP_HIGH))
-CLAMP_MASS = 0.13  # kg: a mini one-hand bar clamp, steel bar, nylon jaws and handle
-CLAMP_COM = (0.0, 0.008, 0.015)  # from O: in the bar, just behind its axis (the steel bar and the pawl's spring)
-EDGE_GAP = 0.008  # m: the bar's face this far from the boards' long edge, clamped
-BAR_Y_CLAMPED = STACK_XY[1] + BOARD_SIZE[1] / 2 + EDGE_GAP + BAR[2][1] / 2  # -0.052
-SLIDE = 0.10  # m: the clamp starts this far to the left of where it clamps, its jaw tips 2.2 cm off the edge
-O_START = (STACK_XY[0], BAR_Y_CLAMPED + SLIDE, BASE + DROP + 0.020)
-JAW_OPEN = 0.060  # m: the sliding jaw's face starts this far above the fixed jaw's face
-JAW_LOW = (-0.016, -0.096, JAW_OPEN)  # the sliding jaw's box from O (its collar rides round the bar)
-JAW_HIGH = (0.016, 0.015, JAW_OPEN + 0.020)
-O_TO_JAW = tuple((a + b) / 2 for a, b in zip(JAW_LOW, JAW_HIGH))
-JAW_SIZE = tuple(b - a for a, b in zip(JAW_LOW, JAW_HIGH))
-PAD_Y = -0.065  # the jaw pads' centres from the bar's axis, 4.7 cm in from the boards' edge when clamped
-PAD_ENDS = (-0.090, -0.040)  # the pads' two ends (y from the bar's axis): a pad touches where it comes closest
-JAW_HOLD = 10000.0  # N/m: the ratchet's spring: the jaw sags 0.03 mm under its weight (less than a click), 1 N pushes it a click on
-# The fixed jaw's pad: a 5 x 2 x 0.5 cm rubber block on a spring (the bar's flex and the pads' rubber in one), whose
-# rest face is the old fixed-jaw face (the origin O's height), 3 mm over the jaw's own face. Pressed by the stack it
-# gives way along the clamp's own up axis, to 3 mm, and its compression times PAD_K is the clamping force.
-PAD_SIZE = (0.020, 0.050, 0.005)
-PAD_CENTRE_Y = PAD_Y  # from the bar's axis: the pad spans y = -0.09 to -0.04, the ends PAD_ENDS
-PAD_CENTRE = (0.0, PAD_CENTRE_Y, -PAD_SIZE[2] / 2)  # from O at rest
-PAD_TRAVEL = 0.003  # m: how far the pad gives way before the jaw's own face takes the load
+# Modelled on a 6 in one-hand mini bar clamp (IRWIN QUICK-GRIP mini: 6 in / 152 mm opening, 2-7/16 in / 62 mm throat,
+# rated 140 lb / 623 N). Parts from O: (name, centre, size[, friction]). The handle: housing round the bar, the fixed
+# jaw on its front (+y face toward the moving jaw), the pistol grip pointing at the robot (-x).
+SLICK = (0.35, 0.3)  # nylon jaws and housing, the steel bar: they slide on the mat
+HOUSING = ("housing", (-0.043, -0.0325, 0.0), (0.038, 0.059, CLAMP_T), SLICK)  # 59 mm along the bar
+FIXED_JAW = ("fixed_jaw", (-0.004, -0.010, 0.0), (0.062, 0.014, CLAMP_T), SLICK)  # 62 mm throat past the bar
+GRIP = ("grip", (-0.106, -0.0495, 0.0), (0.088, 0.025, 0.022))  # rubber, 1 mm clear of the mat
+HANDLE_PARTS = (HOUSING, FIXED_JAW, GRIP)
+HANDLE_LOW, HANDLE_HIGH = (-0.150, -0.062, -CLAMP_T / 2), (0.027, -0.003, CLAMP_T / 2)
+HANDLE_MASS = 0.12
+HANDLE_COM = (-0.061, -0.035, 0.0)
+GRIP_BACK = -0.062  # y of the grip's back face, from O
+RED, BLACK, STEEL = (0.80, 0.08, 0.06), (0.05, 0.05, 0.05), (0.62, 0.64, 0.66)
+
+# The fixed jaw's pad: a 40 x 20 mm rubber pad 5 mm thick on a spring, its face (at O) 3 mm proud of the jaw's own
+# face. Pressed by the work it gives way along the bar, up to 3 mm, and its compression times PAD_K is the force.
+PAD_SIZE = (0.040, 0.005, 0.020)
+PAD_CENTRE = (0.0, -PAD_SIZE[1] / 2, 0.0)
+PAD_TRAVEL = 0.003
 PAD_K = 40000.0  # N/m: 40 N per mm
-PAD_MASS = 0.02
-PAD_DAMPING = 50.0  # N s/m, near critical for PAD_K and PAD_MASS
-FORCE_MIN = 20.0  # N: the least clamping force that scores in full (0.5 mm of the pad's travel)
+PAD_MASS = 0.01
+PAD_DAMPING = 40.0  # N s/m, near critical for PAD_K and PAD_MASS
+FORCE_MIN = 20.0  # N: the least clamping force for full credit (0.5 mm of the pad's travel)
+
+# The trigger: a lever hinged in the housing beside the bar, in front of the grip, pointing at the robot. Squeezed
+# toward the grip it turns about +z, up to 0.40 rad (23 degrees, where its tip nearly meets the grip). Its drive arm,
+# 9 mm from the pivot, pushes the bar toward the fixed jaw: the jaw advances 9 mm x sin(angle), 3.5 mm a full stroke,
+# and a finger 36 mm from the pivot pushes with a 4 to 1 lever. A torsion spring holds it open with 8 N at 40 mm.
+TRIGGER_LOW, TRIGGER_HIGH = (-0.126, -0.007, -0.008), (-0.052, 0.005, 0.008)
+PIVOT = (-0.056, -0.001, 0.0)
+DRIVE_ARM = 0.009  # m: pivot to where the trigger pushes the drive plate
+NOSE = (PIVOT[0] - DRIVE_ARM, PIVOT[1], 0.0)
+TRIGGER_MAX = 0.40  # rad
+TRIGGER_MASS = 0.015
+TRIGGER_SPRING = 0.37  # N m/rad
+TRIGGER_REST = -0.86  # rad: the spring's target beyond the open stop: 0.32 N m (8 N at 40 mm) held open
+TRIGGER_DAMPING = 0.003
+
+# The bar and the moving jaw: the bar (16 x 4.8 mm steel, 231 mm) slides along y through the housing, the moving jaw
+# (62 mm throat, black pad) on its far end, its face 14 cm from the fixed jaw's pad at the start.
+OPEN = 0.140
+MOVING_JAW = ("moving_jaw", (-0.004, OPEN + 0.007, 0.0), (0.062, 0.014, CLAMP_T), SLICK)
+BAR = ("steel_bar", (-0.043, OPEN + 0.014 - 0.1155, 0.0), (0.016, 0.231, 0.0048), SLICK)
+BAR_PARTS = (MOVING_JAW, BAR)
+BAR_LOW, BAR_HIGH = (-0.051, OPEN + 0.014 - 0.231, -CLAMP_T / 2), (0.027, OPEN + 0.014, CLAMP_T / 2)
+BAR_MASS = 0.17
+BAR_COM = (-0.036, 0.068, 0.0)
+BRAKE_HOLD = 300.0  # N/m: the brake's stop holds the bar with a soft spring (0.3 N per mm): it slides freely shut
+BRAKE_DAMPING = 3.0
+
+SLIDE_IN = 0.08  # m: the clamp starts this far in front (-x) of where it clamps, its jaw tips 2.2 cm off the boards
+START_DY = -0.005  # m: and its fixed jaw's pad 5 mm off the right board's edge
+O_START = (O_CLAMPED[0] - SLIDE_IN, O_CLAMPED[1] + START_DY, BASE + DROP + CLAMP_T / 2)
 
 
-def _from_o(p) -> tuple[float, float, float]:
-    """A point given from the clamp's O, in the clamp box's own frame (from its centre)."""
-    return tuple(a - c for a, c in zip(p, O_TO_CENTRE))
+def _centre(lo, hi):
+    return tuple((a + b) / 2 for a, b in zip(lo, hi))
 
 
-RED = (0.80, 0.08, 0.06)
+def _size(lo, hi):
+    return tuple(b - a for a, b in zip(lo, hi))
+
+
+def _world(p_from_o, o=O_START):
+    return tuple(a + b for a, b in zip(o, p_from_o))
+
+
+O_TO_HANDLE = _centre(HANDLE_LOW, HANDLE_HIGH)
+O_TO_TRIGGER = _centre(TRIGGER_LOW, TRIGGER_HIGH)
+O_TO_BAR = _centre(BAR_LOW, BAR_HIGH)
+
+
+def _local(c, p):
+    """A point given from O, in the frame of a box whose centre is ``c`` from O."""
+    return tuple(a - b for a, b in zip(p, c))
+
+
 CLAMP = Compound(
     "clamp",
-    pos=tuple(o + c for o, c in zip(O_START, O_TO_CENTRE)),
-    size=CLAMP_SIZE,
-    mass=CLAMP_MASS,
+    pos=_world(O_TO_HANDLE),
+    size=_size(HANDLE_LOW, HANDLE_HIGH),
+    mass=HANDLE_MASS,
     color=RED,
-    parts=tuple((name, _from_o(c), s, *f) for name, c, s, *f in PARTS),
-    com=_from_o(CLAMP_COM),
-)
-JAW = Ratchet(
-    "sliding_jaw",
-    pos=tuple(o + c for o, c in zip(O_START, O_TO_JAW)),
-    size=JAW_SIZE,
-    mass=0.03,
-    color=RED,
-    to="clamp",
-    axis="Z",
-    lower=-(JAW_OPEN - 0.002),
-    upper=0.0,
-    hold=JAW_HOLD,
-    collide=False,
+    parts=tuple((n, _local(O_TO_HANDLE, c), s, *f) for n, c, s, *f in HANDLE_PARTS),
+    com=_local(O_TO_HANDLE, HANDLE_COM),
+    visible=True,
+    colors=(("grip", BLACK),),
 )
 PAD = Ratchet(
-    "fixed_pad",
-    pos=tuple(o + c for o, c in zip(O_START, PAD_CENTRE)),
-    size=PAD_SIZE,
-    mass=PAD_MASS,
-    color=(0.04, 0.04, 0.04),
+    "pad", pos=_world(PAD_CENTRE), size=PAD_SIZE, mass=PAD_MASS, color=BLACK, to="clamp", axis="Y",
+    lower=-PAD_TRAVEL, upper=0.0, hold=PAD_K, damping=PAD_DAMPING, collide=False,
+)
+BAR_BODY = Slide(
+    "bar",
+    pos=_world(O_TO_BAR),
+    size=_size(BAR_LOW, BAR_HIGH),
+    mass=BAR_MASS,
+    color=RED,
+    parts=tuple((n, _local(O_TO_BAR, c), s, *f) for n, c, s, *f in BAR_PARTS),
+    com=_local(O_TO_BAR, BAR_COM),
+    visible=True,
+    colors=(("steel_bar", STEEL),),
+    decor=(("moving_pad", _local(O_TO_BAR, (0.0, OPEN + 0.001, 0.0)), (0.040, 0.003, 0.020), BLACK),),
     to="clamp",
-    axis="Z",
-    lower=-PAD_TRAVEL,
+    axis="Y",
+    lower=-(OPEN - 0.002),
     upper=0.0,
-    hold=PAD_K,
-    damping=PAD_DAMPING,
+    hold=BRAKE_HOLD,
+    damping=BRAKE_DAMPING,
     collide=False,
 )
+TRIGGER = Hinge(
+    "trigger",
+    pos=_world(O_TO_TRIGGER),
+    size=_size(TRIGGER_LOW, TRIGGER_HIGH),
+    mass=TRIGGER_MASS,
+    color=RED,
+    to="clamp",
+    pivot=_local(O_TO_TRIGGER, PIVOT),
+    axis="Z",
+    lower=0.0,
+    upper=TRIGGER_MAX,
+    spring=TRIGGER_SPRING,
+    rest=TRIGGER_REST,
+    damping=TRIGGER_DAMPING,
+)
+DRIVE = one_way("drive", "bar", "trigger", at=_world(NOSE), axis="Y")
 
 # -- the workbench props: fixed, out of the way ----------------------------------------------------------------------
 MALLET = SimReady("mallet", pos=(0.585, 0.33, TOP), size=(0.394, 0.131, 0.071), yaw=math.pi / 2,
@@ -159,35 +213,45 @@ MALLET = SimReady("mallet", pos=(0.585, 0.33, TOP), size=(0.394, 0.131, 0.071), 
 SQUARE = SimReady("speed_square", pos=(0.58, -0.40, TOP), size=(0.29, 0.218, 0.008), yaw=0.35,
                   package="measurement_ruler_speedsquare_a02", usd="sm_measurement_ruler_speedsquare_a02_01.usd")
 
-OBJECTS = [MAT, *SPACERS, BOARD_LOW, BOARD_UP, CLAMP, JAW, PAD, MALLET, SQUARE]
+OBJECTS = [MAT, BOARD_R, BOARD_L, CLAMP, PAD, BAR_BODY, TRIGGER, MALLET, SQUARE]
+CLAMP_BODIES = ("clamp", "pad", "bar", "trigger")
+BOARDS = ("board_right", "board_left")
+
+SOLVER_ITERATIONS = (32, 8)  # position, velocity: the clamp and the boards press each other with 100 N and more
+
+
+@on_spawn
+def _accurate_solver(name: str, prim) -> None:
+    """More solver iterations for the clamp's bodies and the boards than PhysX's default 4 and 1 (the robot has 16 and
+    4): the clamped panel's force is held by a loop of joint limits and contacts between light bodies."""
+    if name in (*CLAMP_BODIES, *BOARDS):
+        from pxr import PhysxSchema
+
+        api = PhysxSchema.PhysxRigidBodyAPI.Apply(prim)
+        api.CreateSolverPositionIterationCountAttr(SOLVER_ITERATIONS[0])
+        api.CreateSolverVelocityIterationCountAttr(SOLVER_ITERATIONS[1])
+
 
 LOOKS = {}
-if (pathlib.Path(__file__).resolve().parent / "looks" / "clamp.usdc").is_file():
-    LOOKS = {"mat": "mat.usdc", "board_bottom": "board_bottom.usdc", "board_top": "board_top.usdc",
-             "spacer_near": "spacer.usdc", "spacer_far": "spacer.usdc", "clamp": "clamp.usdc",
-             "sliding_jaw": "jaw.usdc"}
+if (pathlib.Path(__file__).resolve().parent / "looks" / "board_right.usdc").is_file():
+    LOOKS = {"mat": "mat.usdc", "board_right": "board_right.usdc", "board_left": "board_left.usdc"}
     dress(LOOKS)
 
 # -- geometry of the state -------------------------------------------------------------------------------------------
-TOUCH = 0.0005  # m: a pad is on its board when its gap is 0.5 mm or less
+TOUCH = 0.0005  # m: a jaw is on its board's edge when its gap is 0.5 mm or less
+JOINT_SHUT = 0.0005  # m: the joint between the boards is closed when no point of it is open more than this
 GAP_FLOOR = -0.003  # m: a jaw deeper in its board than this is nonsense (a numerical blow-up)
-ON_BOARD = 0.01  # m: a pad centre at least this far inside a board's outline is on it
-ALIGNED = 0.003  # m: the boards' corners within this of each other
-MIDDLE = BOARD_SIZE[0] / 6  # m: the middle third of the boards' length, either side of their centre
-CLEAR = 0.01  # m: every finger at least this far from the clamp: let go
-HANG_CLEAR = 0.001  # m: the clamp's lowest point this far above the mat: it hangs on the boards
+ON_EDGE = 0.01  # m: a pad centre at least this far inside a board's ends is on its edge
+ALIGNED = 0.003  # m: the boards' ends within this of each other
+FLUSH = 0.001  # m: the boards' top faces within this of each other along the joint
+CLEAR = 0.03  # m: every finger at least this far from the clamp and the boards: let go
 OFF_TABLE_Z = -0.02  # m: an object whose centre is lower than this from the table top fell off
-
-# What the episode remembers: whether every finger was clear of the clamp at the last step (from on_step).
-STATE = {"clear": True, "pressing": False, "still": False, "history": []}
-
-
-@on_reset
-def reset_memory(env=None) -> None:
-    STATE["clear"] = True
-    STATE["pressing"] = False
-    STATE["still"] = False
-    STATE["history"] = []
+JAW_POINTS = (-0.018, 0.0, 0.018)  # x of the points along each jaw's pad (from its centre) whose gaps are measured
+STILL_STEPS = 10  # control steps (0.5 s at 20 Hz): the clamp and the boards must not have moved over this long
+STILL_DIST = 0.0005  # m
+STILL_TURN = 0.01  # rad
+TOOTH = 0.0001  # m: the brake and the drive plate grip the bar in steps this fine
+HZ = 20.0
 
 
 def _rot(q) -> np.ndarray:
@@ -202,319 +266,433 @@ def _finite(objects) -> bool:
                for s in objects.values())
 
 
-def _clamp_point(objects, p_from_o) -> np.ndarray:
-    """A point of the clamp, given from its O, in the world."""
-    c = objects["clamp"]
-    return np.asarray(c.pos) + _rot(c.quat_xyzw) @ np.asarray(_from_o(p_from_o))
+_CENTRES = {"clamp": O_TO_HANDLE, "pad": PAD_CENTRE, "bar": O_TO_BAR, "trigger": O_TO_TRIGGER}
 
 
-def fixed_pad(objects, y=PAD_Y) -> np.ndarray:
-    """A point on the fixed jaw's pad face, its top (the pad's centre by default), ``y`` from the bar's axis."""
-    p = objects["fixed_pad"]
-    return np.asarray(p.pos) + _rot(p.quat_xyzw) @ np.array([0.0, y - PAD_CENTRE_Y, PAD_SIZE[2] / 2])
+def point(objects, body: str, p_from_o) -> np.ndarray:
+    """A point of a clamp body, given from O as the clamp spawned, in the world now."""
+    s = objects[body]
+    return np.asarray(s.pos) + _rot(s.quat_xyzw) @ (np.asarray(p_from_o) - np.asarray(_CENTRES[body]))
+
+
+def _in_handle(objects, body: str, p_from_o) -> np.ndarray:
+    """Where a point of ``body`` (given from O at spawn) is now, from O in the handle's frame."""
+    h = objects["clamp"]
+    return _rot(h.quat_xyzw).T @ (point(objects, body, p_from_o) - np.asarray(h.pos)) + np.asarray(O_TO_HANDLE)
 
 
 def pad_compression(objects) -> float:
-    """How far the fixed jaw's pad is pressed in (m, along the clamp's up axis, from its rest position). The pad can
-    only be pressed in by something pushing on it, so this is zero for a pad that touches nothing."""
-    c, p = objects["clamp"], objects["fixed_pad"]
-    up = (_rot(c.quat_xyzw).T @ (np.asarray(p.pos) - np.asarray(c.pos)))[2]
-    return float(PAD_CENTRE[2] - O_TO_CENTRE[2] - up)
+    """How far the fixed jaw's pad is pressed in along the bar (m), from its rest on the handle. Only something
+    pushing on its face presses it in, so a pad that touches nothing reads 0."""
+    return float(PAD_CENTRE[1] - _in_handle(objects, "pad", PAD_CENTRE)[1])
 
 
 def clamping_force(objects) -> float:
-    """The force the jaws press the stack with (N): the pad's compression times its spring's stiffness. The jaws and
-    the stack stand still, so the sliding jaw presses the top board with the same force."""
+    """The force the jaws press the work with (N): the pad's compression times its spring's stiffness."""
     return float(PAD_K * max(0.0, pad_compression(objects)))
 
 
-def sliding_pad(objects, y=PAD_Y) -> np.ndarray:
-    """A point on the sliding jaw's face, its underside (its pad's centre by default), ``y`` from the bar's axis."""
-    j = objects["sliding_jaw"]
-    return np.asarray(j.pos) + _rot(j.quat_xyzw) @ np.array([0.0, y - O_TO_JAW[1], -JAW_SIZE[2] / 2])
+def bar_travel(objects) -> float:
+    """How far the bar has moved through the handle from the start (m, negative: toward the fixed jaw)."""
+    return float(_in_handle(objects, "bar", O_TO_BAR)[1] - O_TO_BAR[1])
 
 
-def _local(objects, board: str, p) -> np.ndarray:
+def trigger_angle(objects) -> float:
+    """How far the trigger is squeezed (rad, 0 open, TRIGGER_MAX against its stop)."""
+    r = _rot(objects["clamp"].quat_xyzw).T @ _rot(objects["trigger"].quat_xyzw)
+    return float(math.atan2(r[1, 0], r[0, 0]))
+
+
+def drive_offset(objects) -> float:
+    """Where the trigger's drive arm is along the bar (m), from the drive plate's start on the bar: the one-way drive's
+    coordinate. It cannot go below the drive's stop: there the trigger pushes the bar."""
+    b = objects["bar"]
+    along = _rot(b.quat_xyzw)[:, 1]
+    return float((point(objects, "trigger", NOSE) - point(objects, "bar", NOSE)) @ along)
+
+
+def fixed_pad_points(objects) -> list[np.ndarray]:
+    return [point(objects, "pad", (x, 0.0, 0.0)) for x in JAW_POINTS]
+
+
+def moving_pad_points(objects) -> list[np.ndarray]:
+    return [point(objects, "bar", (x, OPEN, 0.0)) for x in JAW_POINTS]
+
+
+def _board_local(objects, board: str, p) -> np.ndarray:
     b = objects[board]
     return _rot(b.quat_xyzw).T @ (np.asarray(p) - np.asarray(b.pos))
 
 
-def on_board(objects, board: str, p) -> bool:
-    """The point lies over the board's face, at least 1 cm inside its outline."""
-    x, y, _ = _local(objects, board, p)
-    return bool(abs(x) <= BOARD_SIZE[0] / 2 - ON_BOARD and abs(y) <= BOARD_SIZE[1] / 2 - ON_BOARD)
-
-
 def gaps(objects) -> tuple[float, float]:
-    """(fixed, sliding): how close each jaw's pad comes to the face of the board it should grip (m, along the board's
-    normal, the least over the pad's two ends and centre; negative inside it). The fixed jaw under the bottom board,
-    the sliding jaw on the top board. A pad tilted with its clamp touches at one end, as a feeler gauge finds it. A gap
-    says where the jaws are, not how hard they press: that is :func:`clamping_force`."""
-    ys = (PAD_ENDS[0], PAD_Y, PAD_ENDS[1])
-    fixed = min(-BOARD_SIZE[2] / 2 - _local(objects, "board_bottom", fixed_pad(objects, y))[2] for y in ys)
-    sliding = min(_local(objects, "board_top", sliding_pad(objects, y))[2] - BOARD_SIZE[2] / 2 for y in ys)
-    return float(fixed), float(sliding)
+    """(fixed, moving): how close each jaw's pad comes to the outer edge of the board it should press (m, along the
+    board's width, the least over three points along the pad; negative inside it). The fixed jaw on the right board's
+    outer (-y) edge, the moving jaw on the left board's outer (+y) edge. A gap says where a jaw is, not how hard it
+    presses: that is :func:`clamping_force`."""
+    half = BOARD_SIZE[1] / 2
+    fixed = min(-half - _board_local(objects, "board_right", p)[1] for p in fixed_pad_points(objects))
+    moving = min(_board_local(objects, "board_left", p)[1] - half for p in moving_pad_points(objects))
+    return float(fixed), float(moving)
 
 
-def straddles(objects) -> bool:
-    """The clamp is round the stack: the fixed jaw's face under the bottom board and the sliding jaw's face over the
-    top board, each pad centre at least 1 cm inside the boards' outline."""
-    fixed, sliding = gaps(objects)
-    return bool(on_board(objects, "board_bottom", fixed_pad(objects))
-                and on_board(objects, "board_top", sliding_pad(objects))
-                and fixed >= GAP_FLOOR and sliding >= GAP_FLOOR)
+def joint_gap(objects) -> float:
+    """How far open the joint between the boards is at its worst (m): the left board's inner edge, at both its ends,
+    from the right board's inner edge."""
+    hx, hy = BOARD_SIZE[0] / 2, BOARD_SIZE[1] / 2
+    b = objects["board_left"]
+    ends = [np.asarray(b.pos) + _rot(b.quat_xyzw) @ np.array([sx * hx, -hy, 0.0]) for sx in (-1, 1)]
+    return float(max(_board_local(objects, "board_right", e)[1] - hy for e in ends))
+
+
+def _on_edge(objects, board: str, p) -> bool:
+    """The pad centre ``p`` is beside the board's edge: at least 1 cm inside its ends and within its thickness."""
+    x, _, z = _board_local(objects, board, p)
+    return bool(abs(x) <= BOARD_SIZE[0] / 2 - ON_EDGE and abs(z) <= BOARD_SIZE[2] / 2)
+
+
+def round_panel(objects) -> bool:
+    """The clamp is round the panel: each jaw's pad centre beside its board's outer edge (1 cm or more inside the
+    board's ends, within its thickness) and outside it (no deeper in than GAP_FLOOR)."""
+    fixed, moving = gaps(objects)
+    return bool(_on_edge(objects, "board_right", point(objects, "pad", (0.0, 0.0, 0.0)))
+                and _on_edge(objects, "board_left", point(objects, "bar", (0.0, OPEN, 0.0)))
+                and fixed >= GAP_FLOOR and moving >= GAP_FLOOR)
+
+
+def closed_on(objects) -> bool:
+    """Round the panel, both jaws on their edges (gaps 0.5 mm or less) and the joint closed (0.5 mm or less)."""
+    fixed, moving = gaps(objects)
+    return bool(round_panel(objects) and fixed <= TOUCH and moving <= TOUCH and joint_gap(objects) <= JOINT_SHUT)
 
 
 def clamped(objects) -> bool:
-    """Round the stack and pressing it with 20 N or more: the fixed jaw's pad pressed in by the stack to at least
-    FORCE_MIN, and both pads on their boards (gaps 0.5 mm or less)."""
-    fixed, sliding = gaps(objects)
-    return bool(straddles(objects) and clamping_force(objects) >= FORCE_MIN and fixed <= TOUCH and sliding <= TOUCH)
+    """Closed on the panel and pressing it with FORCE_MIN or more (the pad pressed in 0.5 mm or more)."""
+    return bool(closed_on(objects) and clamping_force(objects) >= FORCE_MIN)
 
 
-def hanging(objects) -> bool:
-    """No part of the clamp is lower than 1 mm above the mat: it hangs on the boards by its jaws, not standing."""
-    c = objects["clamp"]
-    half = np.asarray(CLAMP_SIZE) / 2
-    corners = np.array([[sx, sy, sz] for sx in (-1, 1) for sy in (-1, 1) for sz in (-1, 1)]) * half
-    low = float(np.min((np.asarray(c.pos) + corners @ _rot(c.quat_xyzw).T)[:, 2]))
-    return low >= BASE + HANG_CLEAR
-
-
-def in_middle(objects) -> bool:
-    """The jaws' centre is in the middle third of the boards' length (within 3.3 cm of their centre)."""
-    return bool(abs(_local(objects, "board_top", fixed_pad(objects))[0]) <= MIDDLE
-                and abs(_local(objects, "board_bottom", fixed_pad(objects))[0]) <= MIDDLE)
-
-
-def _corners(objects, board: str) -> np.ndarray:
+def _corners(objects, board: str, side: float) -> np.ndarray:
+    """The board's two top corners on its long edge at ``side`` (-1: -y edge, +1: +y edge), near end first."""
     b = objects[board]
-    hx, hy = BOARD_SIZE[0] / 2, BOARD_SIZE[1] / 2
-    pts = np.array([[sx * hx, sy * hy, 0.0] for sx in (-1, 1) for sy in (-1, 1)])
+    hx, hy, hz = (s / 2 for s in BOARD_SIZE)
+    pts = np.array([[sx * hx, side * hy, hz] for sx in (-1, 1)])
     return np.asarray(b.pos) + pts @ _rot(b.quat_xyzw).T
 
 
 def misalignment(objects) -> float:
-    """How far apart (m, across the table) the two boards' matching corners are, at worst."""
-    d = _corners(objects, "board_top")[:, :2] - _corners(objects, "board_bottom")[:, :2]
-    return float(np.max(np.linalg.norm(d, axis=1)))
+    """How far apart (m, along the boards' length) the boards' matching ends are at the joint, at worst."""
+    d = _corners(objects, "board_left", -1) - _corners(objects, "board_right", 1)
+    along = _rot(objects["board_right"].quat_xyzw)[:, 0]
+    return float(np.max(np.abs(d @ along)))
+
+
+def step_height(objects) -> float:
+    """How far apart (m, up) the boards' top faces are along the joint, at worst: a board ridden up on the other."""
+    d = _corners(objects, "board_left", -1)[:, 2] - _corners(objects, "board_right", 1)[:, 2]
+    return float(np.max(np.abs(d)))
 
 
 def aligned(objects) -> bool:
-    return misalignment(objects) < ALIGNED
+    return bool(misalignment(objects) < ALIGNED and step_height(objects) <= FLUSH)
 
 
 def _violation(objects) -> bool:
     if not _finite(objects):
         return True
-    return any(objects[n].pos[2] < TOP + OFF_TABLE_Z
-               for n in ("board_bottom", "board_top", "clamp", "sliding_jaw", "fixed_pad"))
+    return any(objects[n].pos[2] < TOP + OFF_TABLE_Z for n in (*BOARDS, *CLAMP_BODIES))
 
 
-# -- the ratchet, and the fingers ------------------------------------------------------------------------------------
-TAKEUP_STEP = 0.0003  # m: the stop goes this far below the jaw each control step the trigger is pressed, until the pad is on
-SQUEEZE_STEP = 0.00005  # m: and this far once the pad is pressed in (2 N a step)
-PAD_TOUCH = 0.0001  # m: the pad is on the bottom board when it is pressed in this far (4 N)
-SQUEEZE_MAX = 0.0025  # m: the trigger squeezes no further than this much of the pad's travel (100 N)
-PRESS_DIST = 0.004  # m: a finger this close to the sliding jaw is pressing it
-STILL_STEPS = 10  # control steps (0.5 s at 20 Hz): the clamp and the boards must not have moved over this long
-STILL_DIST = 0.0005  # m
-STILL_TURN = 0.01  # rad
-TOOTH = 0.0001  # m: the jaw has been pushed this far past its stop toward the fixed jaw, so the stop follows it
+# -- the fingers -----------------------------------------------------------------------------------------------------
 
 
-def jaw_travel(objects) -> float:
-    """How far the sliding jaw is from where it started along the bar (m, negative toward the fixed jaw)."""
-    c, j = objects["clamp"], objects["sliding_jaw"]
-    return float((_rot(c.quat_xyzw).T @ (np.asarray(j.pos) - np.asarray(c.pos)))[2] - (O_TO_JAW[2] - O_TO_CENTRE[2]))
+def _boxes():
+    """Every collider the fingers must keep clear of, as (body, centre from O at spawn, size)."""
+    out = [("clamp", c, s) for _, c, s, *_ in HANDLE_PARTS]
+    out += [("bar", c, s) for _, c, s, *_ in BAR_PARTS]
+    out += [("pad", PAD_CENTRE, PAD_SIZE), ("trigger", O_TO_TRIGGER, _size(TRIGGER_LOW, TRIGGER_HIGH))]
+    return out
 
 
-def _clamp_boxes():
-    """Every clamp box as (centre from O, size): the bar, the fixed jaw, the handle's grip and foot."""
-    return [(np.asarray(c), np.asarray(s)) for _, c, s, *_ in PARTS]
-
-
-def finger_distance(objects, fingers, jaw_only=False) -> float:
-    """The closest any finger point comes to the clamp or its sliding jaw (m), or to the sliding jaw alone."""
+def finger_distance(objects, fingers, boards: bool = True) -> float:
+    """The closest any finger point comes to the clamp (every part of it) or, with ``boards``, to the boards (m)."""
     if fingers is None or len(fingers) == 0:
         return math.inf
     pts = np.asarray(fingers, float)
     best = math.inf
-    c, j = objects["clamp"], objects["sliding_jaw"]
-    rc = _rot(c.quat_xyzw)
-    o = np.asarray(c.pos) - rc @ np.asarray(O_TO_CENTRE)
-    local = (pts - o) @ rc
-    for centre, size in ([] if jaw_only else _clamp_boxes()):
-        best = min(best, float(np.min(np.linalg.norm(np.maximum(np.abs(local - centre) - size / 2, 0.0), axis=1))))
-    jl = (pts - np.asarray(j.pos)) @ _rot(j.quat_xyzw)
-    best = min(best, float(np.min(np.linalg.norm(np.maximum(np.abs(jl) - np.asarray(JAW_SIZE) / 2, 0.0), axis=1))))
+    for body, centre, size in _boxes():
+        s = objects[body]
+        local = (pts - np.asarray(s.pos)) @ _rot(s.quat_xyzw) - (np.asarray(centre) - np.asarray(_CENTRES[body]))
+        best = min(best, float(np.min(np.linalg.norm(np.maximum(np.abs(local) - np.asarray(size) / 2, 0.0), axis=1))))
+    for board in (BOARDS if boards else ()):
+        b = objects[board]
+        local = (pts - np.asarray(b.pos)) @ _rot(b.quat_xyzw)
+        best = min(best, float(np.min(np.linalg.norm(np.maximum(np.abs(local) - np.asarray(BOARD_SIZE) / 2, 0.0),
+                                                     axis=1))))
     return best
 
 
-def trigger_ready(objects) -> bool:
-    """The clamp is round the stack with its sliding jaw on the top board (gap 0.5 mm or less): the trigger can drive
-    the jaw on. The clamp's own reaction then lifts its fixed jaw's pad against the bottom board."""
-    _, sliding = gaps(objects)
-    return bool(straddles(objects) and sliding <= TOUCH)
+# -- what the episode remembers --------------------------------------------------------------------------------------
+STATE = {"step": 0, "clear": True, "still": False, "history": [], "met_since": None, "was": None}
 
 
-def next_stop(objects, pressing: bool, stop: float) -> float:
-    """Where the ratchet's stop (m from where the sliding jaw started, negative toward the fixed jaw) goes after this
-    control step. It follows the sliding jaw down whenever the jaw has been pushed 0.1 mm past it (never back up).
-    While a finger presses the sliding jaw with the jaw on the stack, it goes on down below the jaw, as a clamp's
-    trigger does: the jaw is driven on against the stack, the bar rises until the fixed jaw's pad meets the bottom board
-    (TAKEUP_STEP a control step) and then the pad gives way and the clamp's own force builds (SQUEEZE_STEP a control
-    step), up to SQUEEZE_MAX of the pad's travel."""
-    travel = jaw_travel(objects)
-    if travel < stop - TOOTH:
-        stop = travel
-    compression = pad_compression(objects)
-    if pressing and trigger_ready(objects) and compression < SQUEEZE_MAX:
-        stop = min(stop, travel) - (SQUEEZE_STEP if compression > PAD_TOUCH else TAKEUP_STEP)
-    return stop
+@on_reset
+def reset_memory(env=None) -> None:
+    STATE.update(step=0, clear=True, still=False, history=[], met_since=None, was=None)
+
+
+def pose(objects) -> tuple:
+    """The clamp's handle, its bar and both boards' positions and turns, to tell whether they have moved."""
+    return tuple((np.asarray(objects[n].pos, float), np.asarray(objects[n].quat_xyzw, float))
+                 for n in ("clamp", "bar", *BOARDS))
+
+
+def settled(history) -> bool:
+    """The clamp and both boards have not moved: at every one of the last STILL_STEPS control steps (0.5 s) each was
+    within 0.5 mm and 0.01 rad of where it is now. ``history`` is the poses of the last steps, oldest first."""
+    if len(history) <= STILL_STEPS:
+        return False
+    new = history[-1]
+    for old in history[-1 - STILL_STEPS:-1]:
+        for (p0, q0), (p1, q1) in zip(old, new):
+            turn = 2 * math.acos(min(1.0, abs(float(np.dot(q0, q1)) / (np.linalg.norm(q0) * np.linalg.norm(q1)))))
+            if np.linalg.norm(p1 - p0) >= STILL_DIST or turn >= STILL_TURN:
+                return False
+    return True
+
+
+def conditions_met(objects, clear: bool, still: bool) -> bool:
+    """Every full-success condition, as things stand: clamped with FORCE_MIN or more, the boards aligned and flush,
+    every finger clear of the clamp and the boards, the clamp and the boards still, and no violation."""
+    return bool(not _violation(objects) and clamped(objects) and aligned(objects) and clear and still)
+
+
+def next_brake(objects, stop: float) -> float:
+    """The brake's stop (m along the bar, negative toward the fixed jaw) after this control step: it follows the bar
+    whenever the bar has gone 0.1 mm past it toward the fixed jaw, never back."""
+    travel = bar_travel(objects)
+    return travel if travel < stop - TOOTH else stop
+
+
+def next_drive(objects, stop: float) -> float:
+    """The drive plate's stop after this control step: it follows the trigger's drive arm whenever the arm has gone
+    back 0.1 mm past it (the trigger springing open), never the other way. A squeeze then pushes the bar from there."""
+    offset = drive_offset(objects)
+    return offset if offset > stop + TOOTH else stop
 
 
 @on_step
-def ratchet_and_fingers(env) -> None:
-    """Every control step: the ratchet's stop follows the sliding jaw toward the fixed jaw (and squeezes while a finger
-    presses it), and the fingers are checked against the clamp."""
+def mechanism_and_memory(env) -> None:
+    """Every control step: the brake and the drive plate grip the bar where it now is, then :func:`remember`."""
     from fingers import finger_points
     from yam_arena.scene import object_states
 
-    objects = object_states(env, ["clamp", "sliding_jaw", "fixed_pad", "board_bottom", "board_top"])
+    objects = object_states(env, [*CLAMP_BODIES, *BOARDS])
     if not _finite(objects):
+        STATE["step"] += 1
         return
-    fingers = finger_points(env)
+    brake = next_brake(objects, upper("bar"))
+    if brake != upper("bar"):
+        set_upper("bar", brake)
+    drive = next_drive(objects, low("drive"))
+    if drive != low("drive"):
+        set_low("drive", drive)
+    remember(objects, finger_points(env))
+    _log(objects)
+
+
+def remember(objects, fingers) -> None:
+    """One control step of the episode's memory: whether every finger is clear of the clamp and the boards, whether
+    the clamp and the boards have been still for 0.5 s, and since which step every full-success condition has held
+    without a break (any lapse, a finger coming back or a board moving, restarts the count)."""
+    STATE["step"] += 1
     STATE["clear"] = finger_distance(objects, fingers) >= CLEAR
-    STATE["pressing"] = finger_distance(objects, fingers, jaw_only=True) <= PRESS_DIST
     STATE["history"] = (STATE["history"] + [pose(objects)])[-(STILL_STEPS + 1):]
     STATE["still"] = settled(STATE["history"])
-    stop = next_stop(objects, STATE["pressing"], upper("sliding_jaw"))
-    if stop != upper("sliding_jaw"):
-        set_upper("sliding_jaw", stop)
+    met = conditions_met(objects, STATE["clear"], STATE["still"])
+    t = STATE["step"] / HZ
+    if met and STATE["met_since"] is None:
+        STATE["met_since"] = STATE["step"]
+        print(f"{TAG} t={t:.2f}s  success conditions met: timing {HOLD_S:g} s", flush=True)
+    elif not met and STATE["met_since"] is not None:
+        STATE["met_since"] = None
+        print(f"{TAG} t={t:.2f}s  success conditions lapsed: timing restarts", flush=True)
+
+
+def _log(objects) -> None:
+    fixed, moving = gaps(objects)
+    now = (round_panel(objects), closed_on(objects), clamped(objects))
+    if now != STATE["was"] or STATE["step"] % 10 == 0:
+        print(f"{TAG} t={STATE['step'] / HZ:.2f}s trigger={math.degrees(trigger_angle(objects)):5.1f}deg "
+              f"bar={bar_travel(objects) * 1000:6.1f}mm brake={upper('bar') * 1000:6.1f} "
+              f"drive={drive_offset(objects) * 1000:5.2f}/{low('drive') * 1000:5.2f} "
+              f"force={clamping_force(objects):5.1f}N gaps={fixed * 1000:5.1f},{moving * 1000:5.1f} "
+              f"joint={joint_gap(objects) * 1000:5.1f} align={misalignment(objects) * 1000:4.1f} "
+              f"round={now[0]} closed={now[1]} clamped={now[2]} clear={STATE['clear']} still={STATE['still']}",
+              flush=True)
+        if DEBUG:
+            h = objects["clamp"]
+            r = _rot(h.quat_xyzw)
+            o = np.asarray(h.pos) - r @ np.asarray(O_TO_HANDLE) - np.asarray(O_CLAMPED)
+            print(f"{TAG}   O-O_clamped=({o[0] * 1000:.1f},{o[1] * 1000:.1f},{o[2] * 1000:.1f})mm "
+                  f"yaw={math.degrees(math.atan2(r[1, 0], r[0, 0])):.2f} tilt={math.degrees(math.acos(min(1, r[2, 2]))):.2f} "
+                  f"boardR=({(objects['board_right'].pos[0] - BOARD_R.pos[0]) * 1000:.1f},"
+                  f"{(objects['board_right'].pos[1] - BOARD_R.pos[1]) * 1000:.1f}) "
+                  f"boardL=({(objects['board_left'].pos[0] - BOARD_L.pos[0]) * 1000:.1f},"
+                  f"{(objects['board_left'].pos[1] - BOARD_L.pos[1]) * 1000:.1f})", flush=True)
+        STATE["was"] = now
 
 
 # -- scoring ---------------------------------------------------------------------------------------------------------
 
 
-def pose(objects) -> tuple:
-    """The clamp's and both boards' positions and turns, to tell whether they have moved."""
-    return tuple((np.asarray(objects[n].pos, float), np.asarray(objects[n].quat_xyzw, float))
-                 for n in ("clamp", "board_bottom", "board_top"))
-
-
-def settled(history) -> bool:
-    """The clamp and both boards have not moved: over the last STILL_STEPS control steps (0.5 s) each stayed within
-    0.5 mm of where it was and turned less than 0.01 rad. History is the poses of the last steps, oldest first. (The
-    simulator's own velocities are not used: a stack pressed with tens of newtons reports about 1 cm/s while it
-    does not move.)"""
-    if len(history) <= STILL_STEPS:
-        return False
-    old, new = history[-1 - STILL_STEPS], history[-1]
-    for (p0, q0), (p1, q1) in zip(old, new):
-        turn = 2 * math.acos(min(1.0, abs(float(np.dot(q0, q1)) / (np.linalg.norm(q0) * np.linalg.norm(q1)))))
-        if np.linalg.norm(p1 - p0) >= STILL_DIST or turn >= STILL_TURN:
-            return False
-    return True
-
-
-def at_rest(objects=None) -> bool:
-    """The clamp and both boards are still: they moved less than 0.5 mm in the last 0.5 s (see :func:`settled`)."""
-    return bool(STATE["still"])
+def held_s() -> float:
+    """How long every full-success condition has held without a break (s), 0 while one fails."""
+    return 0.0 if STATE["met_since"] is None else (STATE["step"] - STATE["met_since"]) / HZ
 
 
 def success(objects) -> bool:
-    """The clamp presses the stack with 20 N or more in its middle third, the boards still aligned, let go, hanging off
-    the mat, and the clamp and the boards at rest."""
-    if _violation(objects):
+    """Every full-success condition (:func:`conditions_met`) has held without a break for HOLD_S (1 s): clamped with
+    20 N or more, the boards aligned and flush, let go, and the clamp and the boards still."""
+    if _violation(objects) or STATE["met_since"] is None:
         return False
-    return bool(clamped(objects) and in_middle(objects) and aligned(objects) and STATE["clear"] and hanging(objects)
-                and at_rest(objects))
+    return bool(conditions_met(objects, STATE["clear"], STATE["still"]) and held_s() >= HOLD_S - 1e-6)
 
 
 def score(objects) -> float:
-    """1.0: success. 0.5: the clamp presses the stack with 20 N or more (both pads touch their boards),
-    but off the middle third, with the boards misaligned by 3 mm or more, still held, standing on the mat or still
-    moving. 0.25: the clamp is round the stack (fixed jaw under it, sliding jaw over it, both pad centres 1 cm or more
-    inside the boards' outline) but presses with less than 20 N, or a pad is more than 0.5 mm off its board.
-    0 otherwise, and 0 if a board or the clamp fell off the table."""
+    """1.0: success. 0.75: clamped with 20 N or more (jaws on both outer edges, the joint closed) but not yet
+    successful (the boards misaligned or not flush, the clamp or a board still held or moving, or not yet for 1 s).
+    0.5: the jaws on both outer edges and the joint closed, but under 20 N. 0.25: the clamp round the panel (each
+    jaw's pad beside its board's outer edge, 1 cm or more inside its ends). 0 otherwise, and 0 if a board or the
+    clamp fell off the table."""
     if _violation(objects):
         return 0.0
     if success(objects):
         return 1.0
     if clamped(objects):
+        return 0.75
+    if closed_on(objects):
         return 0.5
-    return 0.25 if straddles(objects) else 0.0
+    return 0.25 if round_panel(objects) else 0.0
 
 
 def distance(objects) -> float:
-    """Progress: how far the fixed jaw's pad is from under the stack, plus the larger jaw gap and the force still
-    missing (1 mm for each 40 N)."""
+    """Progress: how far the fixed jaw's pad is from where it clamps (along the bar, beyond 5 mm), plus the larger jaw gap, the joint's gap and the
+    force still missing (1 mm for each 40 N)."""
     if not _finite(objects):
         return math.inf
-    pad = fixed_pad(objects)
-    target = np.array([STACK_XY[0], BAR_Y_CLAMPED + PAD_Y, UNDER])
+    off = point(objects, "pad", (0.0, 0.0, 0.0)) - np.asarray(O_CLAMPED)
+    off[1] = max(0.0, abs(off[1]) - 0.005)  # along the bar the boards may sit a few mm either way
     missing = max(0.0, FORCE_MIN - clamping_force(objects)) / PAD_K
-    return float(np.linalg.norm(pad - target) + max(0.0, max(gaps(objects))) + missing)
+    return float(np.linalg.norm(off) + max(0.0, *gaps(objects)) + max(0.0, joint_gap(objects)) + missing)
 
 
 # -- scripted demo ---------------------------------------------------------------------------------------------------
-# Left arm, straight-down grip across the handle (fingers closing along x, turned -90 degrees, the way its wrist
-# reaches, its camera facing away from the right arm): grip the handle 9 cm behind the bar, slide the clamp 10 cm to
-# the right along the mat (its fixed jaw goes under the stack's overhang, 1 cm below the bottom board), lift it
-# 1.8 cm (1 cm to the board, the rest so the arm leans the fixed jaw on it) and hold it there. Right arm, fingers
-# closed, turned +90 degrees: from beside the clamp, push the sliding jaw down 2.4 cm onto the top board and 1.2 cm
-# past it (the arm is position controlled and needs the error to push), and keep its fingers on the jaw: that is the
-# trigger, and while it is pressed the ratchet drives the jaw on and the clamp's force builds (2 N a step, from step
-# 227 to step 307 it reaches about 70 N). The left arm lifts 4 mm more to keep the pad up, lets go while the trigger is
-# pressed, and goes up. Then the right arm goes up. Numbers are TCP positions.
-GRIP_DX = -0.006  # m: at this low reach the left arm's fingers close 6 mm forward of their target (measured in
-# the simulator): aimed this much nearer, they close on the handle without pushing the clamp aside
-GRIP_Y = 0.090  # the left arm's grip on the handle, from the bar's axis, 2 cm from its end
-GRIP_TIP_Z = BASE + 0.010  # the pad tips 1 cm above the mat, 2 cm down the grip's sides
-GRIP_Z = GRIP_TIP_Z + PAD_TIP_PAST_TCP
-LIFT = 0.010 + 0.008
-SQUEEZE = 0.004  # m: the left arm lifts this much more once the sliding jaw is down, to keep the pad up
+# Right arm, straight down, fingers closing along y (along the bar), held as a hand holds a one-hand clamp: the back
+# finger is the palm on the pistol grip's back and stays there, the front finger is the index finger on the trigger,
+# 50 mm from its pivot. The TCP moves with the opening (half of it), so the back finger stays put while the front
+# finger squeezes the trigger (commanded 7 mm past its full stroke, it stops there) and lets it spring back (opened to
+# OPEN_W, 2 cm clear of it). The first squeeze holds the clamp while the arm slides it 8 cm forward, its jaws round the
+# panel's near end; then it pumps the trigger: the bar takes up the slack, pushes the left board onto the right one and
+# both onto the fixed jaw, and the last strokes press the pad in. It lets go and goes up.
+# Open loop: the waypoints are fixed TCP positions; nothing is read from the simulation.
+TCP_X = -0.106  # from O
+BACK_Y = GRIP_BACK + 0.0005  # from O: the back finger's pad, just pressing the grip's back
+TCP_Z = BASE + 0.004 + PAD_TIP_PAST_TCP  # the pad tips 4 mm above the mat
 HOVER_Z = BASE + 0.13
-PUSH_FROM_BAR = -0.086  # the right arm pushes the jaw 1 cm from its tip, over the boards, away from the left arm
-PUSH_Y = BAR_Y_CLAMPED + PUSH_FROM_BAR
-PUSH_LEAN = 0.012
-PUSH_Z = STACK_TOP + JAW_SIZE[2] - PUSH_LEAN + PAD_TIP_PAST_TCP
-PRESS_HOLD = 4.6  # s: the right arm keeps its fingers on the sliding jaw this long (1.0 is an ablation: no squeeze)
-PUSH = 1.0  # 0 (an ablation): the right arm comes down only to the sliding jaw's top, lifted, without pushing
-LEFT_YAW, RIGHT_YAW = -math.pi / 2, math.pi / 2
+SQUEEZE_W = 0.040  # m: the fingers' opening commanded for a squeeze (the trigger's full stroke is 47 mm)
+OPEN_W = 0.090  # m: and between squeezes (the front finger 2 cm clear of the open trigger)
+APPROACH_BACK = 0.008  # m: the back finger comes down this far behind the grip
+STROKES = 2  # pumps after the slide
+CLOSE_S, SQUEEZE_HOLD_S, OPEN_S, OPEN_HOLD_S = 0.5, 0.3, 0.4, 0.2
+
+
+def _fingers(width: float) -> float:
+    """The finger joint target for an opening of ``width`` (m)."""
+    return -width / 2
+
+
+def _tcp_y(width: float, back: float = BACK_Y) -> float:
+    """The TCP's y (from O) that puts the back finger's pad at ``back`` with the fingers opened ``width``."""
+    return back + width / 2
 
 
 def demo():
     w = Waypoint
-    x = STACK_XY[0]
-    gx = x + GRIP_DX
-    y0, y1 = O_START[1] + GRIP_Y, BAR_Y_CLAMPED + GRIP_Y
-    jaw_start_top = O_START[2] + JAW_HIGH[2] + PAD_TIP_PAST_TCP
-    push_z = jaw_start_top + LIFT + PUSH * (PUSH_Z - jaw_start_top - LIFT)
-    return {
-        "left": [
-            w(1.5, (gx, y0, HOVER_Z), FINGER_OPEN, "over the handle", LEFT_YAW),
-            w(1.5, (gx, y0, GRIP_Z), FINGER_OPEN, "down round the handle", LEFT_YAW),
-            w(0.8, (gx, y0, GRIP_Z), FINGER_CLOSED, "grip", LEFT_YAW),
-            w(3.0, (gx, y1, GRIP_Z), FINGER_CLOSED, "slide the fixed jaw under the stack", LEFT_YAW),
-            w(1.2, (gx, y1, GRIP_Z + LIFT), FINGER_CLOSED, "lift against the bottom board", LEFT_YAW),
-            w(2.5, (gx, y1, GRIP_Z + LIFT), FINGER_CLOSED, "hold while the jaw is pushed", LEFT_YAW),
-            w(0.8, (gx, y1, GRIP_Z + LIFT + SQUEEZE), FINGER_CLOSED, "squeeze the stack", LEFT_YAW),
-            w(1.8, (gx, y1, GRIP_Z + LIFT + SQUEEZE), FINGER_CLOSED, "hold while the trigger squeezes", LEFT_YAW),
-            w(0.6, (gx, y1, GRIP_Z + LIFT + SQUEEZE), FINGER_OPEN, "let go", LEFT_YAW),
-            w(0.8, (x, y1 + 0.06, GRIP_Z + LIFT + SQUEEZE), FINGER_OPEN, "off the handle's end", LEFT_YAW),
-            w(1.2, (gx - 0.04, y1 + 0.12, HOVER_Z), FINGER_OPEN, "back to its side", LEFT_YAW),
-        ],
-        "right": [
-            w(2.5, (x, PUSH_Y - 0.03, jaw_start_top + LIFT + 0.03), FINGER_CLOSED, "beside the sliding jaw", RIGHT_YAW),
-            w(5.5, (x, PUSH_Y - 0.03, jaw_start_top + LIFT + 0.03), FINGER_CLOSED, "wait for the clamp", RIGHT_YAW),
-            w(0.8, (x, PUSH_Y, jaw_start_top + LIFT + 0.01), FINGER_CLOSED, "down to the jaw", RIGHT_YAW),
-            w(1.5, (x, PUSH_Y, push_z), FINGER_CLOSED, "push the jaw down", RIGHT_YAW),
-            w(PRESS_HOLD, (x, PUSH_Y, push_z), FINGER_CLOSED, "press the trigger, hold while the left arm lets go",
-              RIGHT_YAW),
-            w(0.8, (x, PUSH_Y, push_z + 0.04), FINGER_CLOSED, "up", RIGHT_YAW),
-            w(1.2, (x - 0.04, PUSH_Y - 0.08, HOVER_Z), FINGER_CLOSED, "back to its side", RIGHT_YAW),
-            w(2.0, (x - 0.04, PUSH_Y - 0.08, HOVER_Z), FINGER_CLOSED, "wait: the clamp hangs on the boards", RIGHT_YAW),
-        ],
-    }
+    x0, x1 = O_START[0] + TCP_X, O_START[0] + TCP_X + SLIDE_IN
+    oy = O_START[1]
+    wide = -FINGER_OPEN * 2  # the fingers fully open (94 mm)
+    y_down = oy + _tcp_y(wide, BACK_Y - APPROACH_BACK)
+    y_open, y_squeeze = oy + _tcp_y(OPEN_W), oy + _tcp_y(SQUEEZE_W)
+    plan = [
+        w(2.0, (x0, y_down, HOVER_Z), FINGER_OPEN, "over the grip and trigger"),
+        w(1.5, (x0, y_down, TCP_Z), FINGER_OPEN, "down round them"),
+        w(0.5, (x0, y_open, TCP_Z), _fingers(OPEN_W), "back finger on the grip"),
+        w(CLOSE_S + 0.1, (x0, y_squeeze, TCP_Z), _fingers(SQUEEZE_W), "squeeze: hold the clamp"),
+        w(SQUEEZE_HOLD_S, (x0, y_squeeze, TCP_Z), _fingers(SQUEEZE_W), "hold"),
+        w(2.5, (x1, y_squeeze, TCP_Z), _fingers(SQUEEZE_W), "slide the jaws round the panel"),
+    ]
+    for k in range(STROKES):
+        plan += [
+            w(OPEN_S, (x1, y_open, TCP_Z), _fingers(OPEN_W), f"let the trigger open ({k + 1})"),
+            w(OPEN_HOLD_S, (x1, y_open, TCP_Z), _fingers(OPEN_W), "open"),
+            w(CLOSE_S, (x1, y_squeeze, TCP_Z), _fingers(SQUEEZE_W), f"squeeze ({k + 1})"),
+            w(SQUEEZE_HOLD_S, (x1, y_squeeze, TCP_Z), _fingers(SQUEEZE_W), "hold"),
+        ]
+    y_wide = oy + _tcp_y(wide, BACK_Y - APPROACH_BACK)
+    if os.environ.get("BAR_CLAMP_DEMO") == "by_hand":
+        return _push_shut_by_hand(plan[:6], x1, y_wide)
+    plan += [
+        w(OPEN_S, (x1, y_open, TCP_Z), _fingers(OPEN_W), "let the trigger open"),
+        w(OPEN_S, (x1, y_wide, TCP_Z), FINGER_OPEN, "let go"),
+        w(1.0, (x1, y_wide, HOVER_Z), FINGER_OPEN, "up"),
+        w(1.0, (x1 - 0.06, y_wide - 0.06, HOVER_Z), FINGER_OPEN, "back to its side"),
+        w(2.5, (x1 - 0.06, y_wide - 0.06, HOVER_Z), FINGER_OPEN, "wait: the clamp holds the boards"),
+    ]
+    return {"right": plan, "left": _camera_boom(sum(p.duration for p in plan))}
+
+
+# The left arm only films: it holds its wrist camera (13 cm above its fingers, looking down) 24 cm above the mat, over
+# the panel's near end, for a close view of the jaws, the bar, the handle and the joint. Its fingers stay closed 9 cm
+# above the mat, over the left board, and touch nothing.
+CAMERA_TCP = (0.33, -0.02, BASE + 0.24 - 0.134)
+CAMERA_YAW = 0.0
+
+
+def _camera_boom(duration: float) -> list:
+    w = Waypoint
+    return [
+        w(3.0, CAMERA_TCP, FINGER_CLOSED, "camera over the clamp", CAMERA_YAW),
+        w(max(0.1, duration - 3.0), CAMERA_TCP, FINGER_CLOSED, "film", CAMERA_YAW),
+    ]
+
+
+# The check that the trigger is needed (``BAR_CLAMP_DEMO=by_hand``): the same start and slide, then, instead of
+# pumping the trigger, the right arm lets go of the clamp and the left arm pushes the moving jaw shut with its closed
+# fingers, as a hand slides the jaw of a one-hand clamp shut, 25 mm past where the jaws meet the panel, and lets go.
+FINGER_T = 0.010  # m: a finger's thickness behind its pad, at the tip
+PUSH_PAST = 0.025  # m: how far past the panel the fingers push the jaw
+
+
+def _push_shut_by_hand(plan: list, x1: float, y_wide: float) -> dict:
+    """The right arm slides the clamp in as the demo does and lets go; the left arm then pushes the moving jaw shut."""
+    w = Waypoint
+    right = plan + [
+        w(OPEN_S, (x1, y_wide, TCP_Z), FINGER_OPEN, "let go"),
+        w(1.0, (x1, y_wide, HOVER_Z), FINGER_OPEN, "up"),
+        w(1.0, (x1 - 0.06, y_wide - 0.06, HOVER_Z), FINGER_OPEN, "back to its side"),
+    ]
+    jaw_x = O_CLAMPED[0] + MOVING_JAW[1][0]
+    face = O_CLAMPED[1] + OPEN + MOVING_JAW[2][1] - 0.0035  # the moving jaw's back after the first squeeze
+    slack = face - MOVING_JAW[2][1] - (O_CLAMPED[1] + PANEL_W)  # how far it is from the panel
+    y_start, y_end = face + FINGER_T + 0.015, face + FINGER_T - slack - PUSH_PAST
+    wait = sum(p.duration for p in right) - 1.0
+    left = [
+        w(2.0, (jaw_x, y_start, HOVER_Z), FINGER_CLOSED, "over the moving jaw, fingers closed"),
+        w(wait - 2.0, (jaw_x, y_start, HOVER_Z), FINGER_CLOSED, "wait for the slide"),
+        w(1.5, (jaw_x, y_start, TCP_Z), FINGER_CLOSED, "down behind it"),
+        w(3.0, (jaw_x, y_end, TCP_Z), FINGER_CLOSED, "push the jaw shut"),
+        w(1.0, (jaw_x, y_end, TCP_Z), FINGER_CLOSED, "hold"),
+        w(1.0, (jaw_x, y_end + 0.03, TCP_Z), FINGER_CLOSED, "back off"),
+        w(1.0, (jaw_x, y_end + 0.03, HOVER_Z), FINGER_CLOSED, "up"),
+        w(3.0, (jaw_x, y_end + 0.03, HOVER_Z), FINGER_CLOSED, "wait"),
+    ]
+    return {"right": right, "left": left}

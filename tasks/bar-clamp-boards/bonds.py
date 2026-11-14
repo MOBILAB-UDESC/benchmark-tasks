@@ -1,6 +1,7 @@
-"""bonds: a rigid body made of several boxes, and a box on a one-way (ratchet) slide, for yam_arena task files.
+"""bonds: rigid bodies made of several boxes, boxes on slides and hinges, and a one-way drive between two of them,
+for yam_arena task files.
 
-yam_arena's task files spawn plain primitives. This module adds two boxes:
+yam_arena's task files spawn plain primitives. This module adds these boxes and joints:
 
 - :class:`Compound`: a ``Box`` with a mass whose spawned cuboid keeps its size (so the bounds and the centre the
   scorer reads are the cuboid's) but loses its collider. In its place the body gets the box colliders ``parts``
@@ -14,6 +15,17 @@ yam_arena's task files spawn plain primitives. This module adds two boxes:
   together: a task that lowers it to wherever the box has been pushed makes a one-way ratchet, which the box can be
   pushed past (against ``hold`` times how far) but never pulled back over. ``collide=False`` lets the box and ``to``
   pass through each other (a jaw whose collar rides on the bar).
+- :class:`Slide`: a :class:`Compound` on such a slide (a bar with its jaw).
+- :class:`Hinge`: a ``Box`` with a mass on a revolute joint to the free object ``to``, about one of its own axes
+  through ``pivot`` (a point in the box's frame), from ``lower`` to ``upper`` rad, with a torsion spring (``spring``
+  N m/rad toward ``rest`` rad, ``damping`` N m s/rad). A clamp's trigger.
+- :func:`one_way`: a joint between two of these bodies that only pushes: a point of ``body1`` (say a trigger's drive
+  arm) cannot pass a stop on ``body0`` (say the bar) along one axis; everything else is free. :func:`set_low` moves
+  the stop at run time: a task that moves it to wherever the point has gone back to makes a drive that grips on the
+  push and slips on the return, as a clamp's drive plate does.
+
+A :class:`Compound` with ``visible=True`` is drawn as its part boxes, each in its colour (``colors``), with optional
+render-only boxes (``decor``: pads, a rubber grip), and its own cuboid is hidden.
 
 Every reset puts each ratchet's upper limit back where it spawned. Importing this module hooks
 ``yam_arena.scene.task_object`` when that module is imported (after Isaac Sim starts), and
@@ -35,7 +47,8 @@ from dataclasses import dataclass
 
 from yam_arena.task_file import Box
 
-__all__ = ["Compound", "Ratchet", "install", "on_reset", "on_spawn", "on_step", "set_upper", "upper"]
+__all__ = ["Compound", "Hinge", "Ratchet", "Slide", "install", "low", "on_reset", "on_spawn", "on_step", "one_way",
+           "set_low", "set_upper", "upper"]
 
 GRIPPY = (1.2, 1.0)  # yam_arena's friction for task objects (constants.GRIPPY_FRICTION)
 
@@ -48,11 +61,17 @@ class Compound(Box):
 
     parts: tuple = ()
     com: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    visible: bool = False  # drawn as its parts (and decor), its own cuboid hidden
+    colors: tuple = ()  # ((part name, sRGB), ...): a part's colour when visible (default: the box's colour)
+    decor: tuple = ()  # ((name, centre, size, sRGB), ...): render-only boxes in the box's frame
 
     def _check(self) -> None:
         super()._check()
         if self.mass is None:
             raise ValueError(f"{self.name}: a compound must have a mass")
+        for name, centre, size, rgb in self.decor:
+            if not (len(centre) == 3 and len(size) == 3 and min(size) > 0 and all(0 <= c <= 1 for c in rgb)):
+                raise ValueError(f"{self.name}.decor {name}: centre, size and sRGB colour")
         if not self.parts:
             raise ValueError(f"{self.name}: a compound needs at least one part")
         half = [s / 2 for s in self.size]
@@ -96,6 +115,56 @@ class Ratchet(Box):
             raise ValueError(f"{self.name}: hold must be positive and damping not negative")
 
 
+@dataclass(frozen=True)
+class Slide(Compound, Ratchet):
+    """A :class:`Compound` on a :class:`Ratchet`'s slide: a bar and its jaw, sliding through a clamp's handle."""
+
+
+@dataclass(frozen=True)
+class Hinge(Box):
+    """A free box on a revolute joint about its own ``axis`` through ``pivot`` (in the box's frame, from its centre) to
+    the free object ``to``, from ``lower`` to ``upper`` rad from where it spawns, pulled toward ``rest`` rad by a
+    torsion spring of ``spring`` N m/rad with ``damping`` N m s/rad (``rest`` beyond ``lower`` gives the spring a
+    preload at the stop). It does not collide with ``to``."""
+
+    to: str = ""
+    pivot: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    axis: str = "Z"
+    lower: float = 0.0
+    upper: float = 0.5
+    spring: float = 0.0
+    rest: float = 0.0
+    damping: float = 0.0
+
+    def _check(self) -> None:
+        super()._check()
+        if self.mass is None:
+            raise ValueError(f"{self.name}: a hinged box must have a mass")
+        if self.axis not in ("X", "Y", "Z"):
+            raise ValueError(f"{self.name}.axis must be X, Y or Z")
+        if not (self.lower <= 0.0 <= self.upper and self.lower < self.upper):
+            raise ValueError(f"{self.name}: lower <= 0 <= upper is where it spawns, and the range must not be empty")
+        if not (self.to and self.to.isidentifier()):
+            raise ValueError(f"{self.name}.to must name the free object it turns on")
+        if self.spring < 0 or self.damping < 0:
+            raise ValueError(f"{self.name}: spring and damping must not be negative")
+        if any(abs(p) > s / 2 + 1e-9 for p, s in zip(self.pivot, self.size)):
+            raise ValueError(f"{self.name}: the pivot must lie inside the box")
+
+
+@dataclass(frozen=True)
+class OneWay:
+    """A one-way drive: the point ``at`` (world, where both bodies spawn) of ``body1`` may not move along the world axis
+    ``axis`` to below the stop on ``body0`` (``low`` m from where it spawns, 0 at first); it is free in every other
+    direction and in turning. Made by :func:`one_way`."""
+
+    name: str
+    body0: str
+    body1: str
+    at: tuple[float, float, float]
+    axis: str = "Y"
+
+
 # -- frames ----------------------------------------------------------------------------------------------------------
 
 
@@ -112,6 +181,19 @@ _PRIMS: dict = {}  # each ratchet's spawned prim, to find its joint at run time
 _UPPER: dict[str, float] = {}  # each ratchet's upper limit now
 _SPAWN: dict = {}
 _SPAWNED: list = []  # callbacks run on every task-file box as it spawns
+_ONE_WAY: dict[str, OneWay] = {}
+_JOINTS: dict = {}  # each one-way drive's joint prim, once made
+_LOW: dict[str, float] = {}  # each one-way drive's stop now
+
+
+def one_way(name: str, body0: str, body1: str, at, axis: str = "Y") -> OneWay:
+    """Register a one-way drive (see :class:`OneWay`) between two task-file boxes. Made when the later one spawns."""
+    if axis not in ("X", "Y", "Z"):
+        raise ValueError(f"{name}.axis must be X, Y or Z")
+    spec = OneWay(name, body0, body1, tuple(float(a) for a in at), axis)
+    _ONE_WAY[name] = spec
+    _LOW[name] = 0.0
+    return spec
 
 
 def _material(stage, path, friction, combine="average"):
@@ -132,6 +214,10 @@ def _compound(prim, spec: Compound) -> None:
     from pxr import Gf, PhysxSchema, Usd, UsdGeom, UsdPhysics, UsdShade
 
     stage = prim.GetStage()
+    if spec.visible:
+        for p in Usd.PrimRange(prim):
+            if p.IsA(UsdGeom.Gprim):
+                UsdGeom.Imageable(p).MakeInvisible()
     for p in [p for p in Usd.PrimRange(prim) if p.HasAPI(UsdPhysics.CollisionAPI)]:
         for api in ("PhysicsCollisionAPI", "PhysxCollisionAPI", "PhysicsMeshCollisionAPI", "MaterialBindingAPI"):
             if api in p.GetAppliedSchemas():
@@ -146,14 +232,38 @@ def _compound(prim, spec: Compound) -> None:
         cube.CreateSizeAttr(1.0)
         cube.AddTranslateOp().Set(Gf.Vec3d(*centre))
         cube.AddScaleOp().Set(Gf.Vec3f(*size))
-        UsdGeom.Imageable(cube.GetPrim()).MakeInvisible()
+        if spec.visible:
+            _paint(stage, cube, dict(spec.colors).get(name, spec.color))
+        else:
+            UsdGeom.Imageable(cube.GetPrim()).MakeInvisible()
         UsdPhysics.CollisionAPI.Apply(cube.GetPrim())
         contact = PhysxSchema.PhysxCollisionAPI.Apply(cube.GetPrim())
         contact.CreateContactOffsetAttr(0.004)
         contact.CreateRestOffsetAttr(0.0)
         UsdShade.MaterialBindingAPI.Apply(cube.GetPrim()).Bind(
             material, UsdShade.Tokens.strongerThanDescendants, "physics")
+    for name, centre, size, rgb in spec.decor:
+        cube = UsdGeom.Cube.Define(stage, prim.GetPath().AppendPath(f"parts/{name}"))
+        cube.CreateSizeAttr(1.0)
+        cube.AddTranslateOp().Set(Gf.Vec3d(*centre))
+        cube.AddScaleOp().Set(Gf.Vec3f(*size))
+        _paint(stage, cube, rgb)
     UsdPhysics.MassAPI.Apply(prim).CreateCenterOfMassAttr(Gf.Vec3f(*spec.com))
+
+
+def _paint(stage, gprim, rgb, rough: float = 0.5) -> None:
+    """Bind a plain preview-surface material of colour ``rgb`` (sRGB) to ``gprim`` for rendering."""
+    from pxr import Gf, Sdf, UsdShade
+
+    path = gprim.GetPath().AppendChild("look")
+    material = UsdShade.Material.Define(stage, path)
+    shader = UsdShade.Shader.Define(stage, path.AppendChild("shader"))
+    shader.CreateIdAttr("UsdPreviewSurface")
+    linear = tuple(c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in rgb)
+    shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(*linear))
+    shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(rough)
+    material.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
+    UsdShade.MaterialBindingAPI.Apply(gprim.GetPrim()).Bind(material)
 
 
 def _ratchet(prim, spec: Ratchet) -> None:
@@ -185,6 +295,88 @@ def _ratchet(prim, spec: Ratchet) -> None:
     _UPPER[spec.name] = float(spec.upper)
 
 
+def _hinge(prim, spec: Hinge) -> None:
+    """The revolute joint from ``spec.to`` to the spawned box about ``spec.axis`` through ``spec.pivot``, its limits
+    and its torsion spring (USD's angular limits, targets and gains are per degree)."""
+    from pxr import Gf, Sdf, UsdPhysics
+
+    if spec.to not in _PLACED or not _PLACED[spec.to][2]:
+        raise KeyError(f"{spec.name}: {spec.to} must be a free task-file object listed before it")
+    joint = UsdPhysics.RevoluteJoint.Define(prim.GetStage(), prim.GetPath().AppendChild("hinge"))
+    pos, yaw, _ = _PLACED[spec.to]
+    pivot = tuple(p + q for p, q in zip(spec.pos, _rz(spec.yaw, spec.pivot)))
+    joint.CreateBody0Rel().SetTargets([Sdf.Path(prim.GetPath().GetParentPath().AppendChild(spec.to))])
+    joint.CreateLocalPos0Attr(Gf.Vec3f(*_rz(-yaw, tuple(a - p for a, p in zip(pivot, pos)))))
+    turn = (spec.yaw - yaw) / 2
+    joint.CreateLocalRot0Attr(Gf.Quatf(math.cos(turn), 0.0, 0.0, math.sin(turn)))
+    joint.CreateBody1Rel().SetTargets([prim.GetPath()])
+    joint.CreateLocalPos1Attr(Gf.Vec3f(*spec.pivot))
+    joint.CreateLocalRot1Attr(Gf.Quatf(1.0, 0.0, 0.0, 0.0))
+    joint.CreateAxisAttr(spec.axis)
+    joint.CreateLowerLimitAttr(math.degrees(spec.lower))
+    joint.CreateUpperLimitAttr(math.degrees(spec.upper))
+    joint.CreateCollisionEnabledAttr(False)
+    if spec.spring > 0 or spec.damping > 0:
+        drive = UsdPhysics.DriveAPI.Apply(joint.GetPrim(), "angular")
+        drive.CreateTypeAttr("force")
+        drive.CreateStiffnessAttr(float(spec.spring) * math.pi / 180)
+        drive.CreateDampingAttr(float(spec.damping) * math.pi / 180)
+        drive.CreateTargetPositionAttr(math.degrees(spec.rest))
+
+
+_AXES = {"X": (1.0, 0.0, 0.0), "Y": (0.0, 1.0, 0.0), "Z": (0.0, 0.0, 1.0)}
+_TO_X = {"X": (1.0, 0.0, 0.0, 0.0), "Y": (math.sqrt(0.5), 0.0, 0.0, math.sqrt(0.5)),
+         "Z": (math.sqrt(0.5), 0.0, -math.sqrt(0.5), 0.0)}  # w, x, y, z: turns the joint's x axis onto that axis
+
+
+def _make_one_way(stage, spec: OneWay) -> None:
+    """A D6 joint whose only limited motion is its frames' offset along ``spec.axis`` (from ``spec.at``, where both
+    frames spawn): at least ``low`` (0 at first), at most 1 m. Turning and the other two directions are free."""
+    from pxr import Gf, Sdf, UsdPhysics
+
+    paths = {}
+    for body in (spec.body0, spec.body1):
+        if body not in _PRIMS_ANY:
+            return
+        paths[body] = _PRIMS_ANY[body].GetPath()
+    if spec.name in _JOINTS:
+        return
+    joint = UsdPhysics.Joint.Define(stage, paths[spec.body0].AppendChild(spec.name))
+    for i, body in enumerate((spec.body0, spec.body1)):
+        pos, yaw, _ = _PLACED[body]
+        local = _rz(-yaw, tuple(a - p for a, p in zip(spec.at, pos)))
+        w, x, y, z = _TO_X[spec.axis]
+        c, s_ = math.cos(-yaw / 2), math.sin(-yaw / 2)  # the world axis seen from the body
+        q = (c * w - s_ * z, c * x - s_ * y, c * y + s_ * x, c * z + s_ * w)
+        (joint.CreateBody0Rel if i == 0 else joint.CreateBody1Rel)().SetTargets([paths[body]])
+        (joint.CreateLocalPos0Attr if i == 0 else joint.CreateLocalPos1Attr)(Gf.Vec3f(*local))
+        (joint.CreateLocalRot0Attr if i == 0 else joint.CreateLocalRot1Attr)(Gf.Quatf(*q))
+    joint.CreateCollisionEnabledAttr(False)
+    limit = UsdPhysics.LimitAPI.Apply(joint.GetPrim(), "transX")
+    limit.CreateLowAttr(float(_LOW[spec.name]))
+    limit.CreateHighAttr(1.0)
+    _JOINTS[spec.name] = joint.GetPrim()
+
+
+def low(name: str) -> float:
+    """The stop of the one-way drive ``name`` now (m from where it was made)."""
+    return _LOW[name]
+
+
+def set_low(name: str, value: float) -> None:
+    """Move the stop of the one-way drive ``name`` to ``value`` (m). Call it from an :func:`on_step` callback."""
+    from pxr import UsdPhysics
+
+    if name not in _JOINTS:
+        raise KeyError(f"{name} has not been made (both bodies must have spawned)")
+    value = float(min(value, 0.9))
+    UsdPhysics.LimitAPI(_JOINTS[name], "transX").GetLowAttr().Set(value)
+    _LOW[name] = value
+
+
+_PRIMS_ANY: dict = {}  # every spawned task-file box's prim
+
+
 def _spawn_cuboid(prim_path: str, cfg, translation=None, orientation=None, **kwargs):
     """Isaac Lab's ``spawn_cuboid``, then the parts of a compound or the joint of a ratchet box. Installed in place of
     the original, which the spawner configurations name by module and attribute, so a replacement on one
@@ -194,10 +386,16 @@ def _spawn_cuboid(prim_path: str, cfg, translation=None, orientation=None, **kwa
     spec = _SPECS.get(name)
     if isinstance(spec, Compound):
         _compound(prim, spec)
-    elif isinstance(spec, Ratchet):
+    if isinstance(spec, Ratchet):
         _ratchet(prim, spec)
         _PRIMS[spec.name] = prim
+    if isinstance(spec, Hinge):
+        _hinge(prim, spec)
     if name in _PLACED:
+        _PRIMS_ANY[name] = prim
+        for oneway in _ONE_WAY.values():
+            if name in (oneway.body0, oneway.body1):
+                _make_one_way(prim.GetStage(), oneway)
         for fn in _SPAWNED:
             fn(name, prim)
     return prim
@@ -242,6 +440,9 @@ def _restore(env=None) -> None:
     for name in _PRIMS:
         if _UPPER[name] != _SPECS[name].upper:
             set_upper(name, _SPECS[name].upper)
+    for name in _JOINTS:
+        if _LOW[name] != 0.0:
+            set_low(name, 0.0)
 
 
 # -- hooking yam_arena -----------------------------------------------------------------------------------------------
@@ -278,7 +479,7 @@ def _patch_scene(scene) -> None:
     def task_object_hook(spec):
         if hasattr(spec, "pos"):
             _PLACED[spec.name] = (tuple(spec.pos), float(spec.yaw), spec.free)
-        if isinstance(spec, (Compound, Ratchet)):
+        if isinstance(spec, (Compound, Ratchet, Hinge)):
             _SPECS[spec.name] = spec
         return task_object(spec)
 
