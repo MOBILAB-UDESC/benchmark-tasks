@@ -33,7 +33,7 @@ from yam_arena.urdf import quat_xyzw_to_matrix  # noqa: E402
 
 SCENE = "station"
 TOP = TABLE_TOP[SCENE]
-SUCCESS_HOLD_S = 1.0
+SUCCESS_HOLD_S = 0.0  # success() itself needs the full-success state held for HOLD_S: the run ends when it first does
 MM = 0.001
 
 # -- the mat, the board and its rails -------------------------------------------------------------------------------
@@ -160,6 +160,7 @@ TOUCH = 0.6 * MM  # the blade's face this close to the lead's face is on it
 FLY_DIST = 0.10  # m: the offcut this far from where the lead left the board, and not held, has flown
 MAT_REST = 0.007  # m: the offcut's centre this low over the mat lies on it
 KICK = 3.0  # m/s: the clipped lead's snap
+HOLD_S = 1.0  # s: full success needs the offcut at rest in the cup, let go, without a break this long
 
 SPIN_DAMPING = 30.0  # 1/s: the lead's pieces are 2 mm sticks that PhysX would let spin on for ever where they rest
 
@@ -179,13 +180,14 @@ def _damp(name: str, prim) -> None:
 # What the episode remembers: how the lead was clipped ("flush", "high" or ""), whether the offcut ever went 10 cm from
 # the board without being held (free flight), the snap waiting to be given to the offcut at the next control step, and
 # for the control step that just ended whether a gripper held the offcut (both finger pads on it, in some physics
-# substep) and whether any robot link touched it.
-STATE = {"cut": "", "flew": False, "kick": None, "held": False, "touch": False}
+# substep) and whether any robot link touched it, and since when (s, ``None`` while not) the offcut has lain at rest in the
+# cup, let go, after a flush clip and no free flight, without a break: any lapse restarts it.
+STATE = {"cut": "", "flew": False, "kick": None, "held": False, "touch": False, "met": None, "t": 0.0}
 
 
 @on_reset
 def reset_memory(env=None) -> None:
-    STATE.update(cut="", flew=False, kick=None, held=False, touch=False)
+    STATE.update(cut="", flew=False, kick=None, held=False, touch=False, met=None, t=0.0)
     contacts.take()
 
 
@@ -270,6 +272,11 @@ def observe(objects, dt: float = 0.05, links=()) -> None:
             STATE["kick"] = (names, kick_velocity(objects))
     elif offcut_distance(objects) > FLY_DIST and not STATE["held"]:
         STATE["flew"] = True
+    STATE["t"] += dt
+    if not conditions_met(objects):
+        STATE["met"] = None
+    elif STATE["met"] is None:
+        STATE["met"] = STATE["t"]
 
 
 @on_step
@@ -318,18 +325,30 @@ def free(objects) -> bool:
     return offcut_distance(objects) > FLY_DIST and not STATE["held"]
 
 
-def success(objects) -> bool:
-    """Clipped flush, the offcut never in free flight beyond 10 cm, and it lies still in the scrap cup, let go: no robot
-    link touches it."""
+def conditions_met(objects) -> bool:
+    """Every full-success condition, as things stand: clipped flush, the offcut never in free flight beyond 10 cm, and
+    it lies still in the scrap cup, let go (no robot link touches it)."""
     if not _finite(objects) or STATE["cut"] != "flush" or STATE["flew"] or free(objects):
         return False
     top = objects["lead_top"]
     return bool(in_cup(top) and top.resting() and not STATE["touch"])
 
 
+def held_s() -> float:
+    """How long every full-success condition has held without a break (s), 0 while one fails."""
+    return 0.0 if STATE["met"] is None else STATE["t"] - STATE["met"]
+
+
+def success(objects) -> bool:
+    """Every full-success condition (``conditions_met``) holds now and has held without a break for ``HOLD_S`` (1 s),
+    counted in control steps from the first step it held."""
+    return bool(conditions_met(objects) and STATE["met"] is not None and held_s() >= HOLD_S - 1e-6)
+
+
 def score(objects) -> float:
-    """1.0: success. 0.75: clipped flush, the offcut lies still on the mat, let go. 0.5: clipped flush, the offcut
-    anywhere else (in a gripper, on the board, moving). 0.25: clipped, the stub taller than 1 mm. 0: not clipped, or
+    """1.0: success (the offcut at rest in the cup, let go, for 1 s). 0.75: clipped flush, the offcut lies still on the
+    mat, let go, or still in the cup, let go, for less than 1 s. 0.5: clipped flush, the offcut anywhere else (in a
+    gripper, on the board, moving). 0.25: clipped high (a 4 mm stub). 0: not clipped, or
     the offcut was ever in free flight (more than 10 cm from the board, no gripper holding it)."""
     if not _finite(objects) or not STATE["cut"] or STATE["flew"] or free(objects):
         return 0.0
@@ -338,7 +357,7 @@ def score(objects) -> float:
     top = objects["lead_top"]
     if top.resting() and not STATE["touch"]:
         if in_cup(top):
-            return 1.0
+            return 1.0 if success(objects) else 0.75
         if on_mat(top):
             return 0.75
     return 0.5

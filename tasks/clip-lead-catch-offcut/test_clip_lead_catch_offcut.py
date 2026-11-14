@@ -93,6 +93,12 @@ RIGHT = ("/World/envs/env_0/RightArm/finger_a", "/World/envs/env_0/RightArm/fing
 ONE_PAD = LEFT[:1]
 
 
+def _wait(top, seconds=1.0, links=()):
+    """Let the offcut lie at ``top`` (touched by ``links``) for ``seconds`` more, one control step at a time."""
+    for _ in range(round(seconds / DT)):
+        T.observe(_scene(top=top), DT, links)
+
+
 def _after_clip(top, links=()):
     """Clip the lead flush, then let the offcut be at ``top`` (touched by the robot links ``links``)."""
     T.observe(_clip(), DT)
@@ -301,7 +307,9 @@ def test_held_and_carried_then_let_go_in_the_cup_is_full_score():
     T.observe(_scene(top=_state(IN_CUP, vel=(0.0, 0.0, -0.5))), DT)  # dropped: nothing touches it
     T.observe(_scene(top=IN_CUP), DT)
     s = _scene(top=IN_CUP)
-    assert not T.STATE["flew"] and T.score(s) == 1.0 and T.success(s)
+    assert not T.STATE["flew"] and T.score(s) == 0.75 and not T.success(s)  # at rest in the cup: the second starts
+    _wait(IN_CUP)
+    assert T.score(s) == 1.0 and T.success(s)
 
 
 def test_free_flight_past_10_cm_scores_zero():
@@ -360,8 +368,75 @@ def test_start_scores_zero():
 
 def test_clipped_flush_and_dropped_in_the_cup_is_success():
     _after_clip(IN_CUP)
+    _wait(IN_CUP)
     s = _scene(top=IN_CUP)
     assert T.score(s) == 1.0 and T.success(s)
+
+
+def test_full_score_needs_one_second_at_rest_in_the_cup():
+    _after_clip(IN_CUP)  # the first step at rest in the cup, let go: the second starts here
+    s = _scene(top=IN_CUP)
+    for _ in range(round(0.95 / DT)):  # 0.95 s later: not yet
+        assert T.score(s) == 0.75 and not T.success(s)
+        T.observe(s, DT)
+    assert T.held_s() == pytest.approx(0.95)
+    assert T.score(s) == 0.75 and not T.success(s)
+    T.observe(s, DT)  # 1.0 s
+    assert T.held_s() == pytest.approx(1.0) and T.score(s) == 1.0 and T.success(s)
+
+
+@pytest.mark.parametrize("lapse", ["moving", "spinning", "touched", "pinched", "lifted out"])
+def test_any_lapse_restarts_the_second(lapse):
+    _after_clip(IN_CUP)
+    _wait(IN_CUP, 0.9)
+    spin = ObjectState(pos=np.asarray(IN_CUP), quat_xyzw=np.array([0, 0, 0, 1.0]), lin_vel=np.zeros(3),
+                       ang_vel=np.array([0.0, 0.0, 0.6]), low=np.zeros(3), high=np.zeros(3))
+    top, links = {"moving": (_state(IN_CUP, vel=(0.0, 0.02, 0.0)), ()), "spinning": (spin, ()),
+                  "touched": (IN_CUP, ONE_PAD), "pinched": (IN_CUP, LEFT),
+                  "lifted out": ((*T.CUP_XY, T.CUP_RIM + 0.01), LEFT)}[lapse]
+    T.observe(_scene(top=top), DT, links)
+    assert T.held_s() == 0.0
+    _wait(IN_CUP)  # back at rest and let go: the second starts over at the first of these steps, 0.95 s ago
+    assert T.held_s() == pytest.approx(0.95)
+    assert T.score(_scene(top=IN_CUP)) == 0.75 and not T.success(_scene(top=IN_CUP))
+    T.observe(_scene(top=IN_CUP), DT)
+    assert T.score(_scene(top=IN_CUP)) == 1.0 and T.success(_scene(top=IN_CUP))
+
+
+def _episode(missing):
+    """A 3 s episode with every full-success condition but ``missing``; returns the highest score and any success."""
+    T.reset_memory()
+    top, links = IN_CUP, ()
+    if missing == "clip":
+        T.observe(_scene(top=IN_CUP), DT)  # the offcut moved to the cup without a clip
+    elif missing == "flush":
+        T.observe(_clip(z=T.Z_BT + 3 * MM), DT)
+    else:
+        T.observe(_clip(), DT)
+        if missing == "no free flight":
+            T.observe(_scene(top=T.BASE_POINT + (0.0, 0.2, 0.05)), DT)
+    if missing == "in the cup":
+        top = ON_MAT
+    elif missing == "under the rim":
+        top = (*T.CUP_XY, T.CUP_RIM - 0.004)
+    elif missing == "at rest":
+        top = _state(IN_CUP, vel=(0.0, 0.0, 0.011))
+    elif missing == "let go":
+        links = ONE_PAD
+    best, done = 0.0, False
+    for _ in range(round(3.0 / DT)):
+        s = _scene(top=top)
+        T.observe(s, DT, links)
+        best, done = max(best, T.score(s)), done or T.success(s)
+    return best, done
+
+
+@pytest.mark.parametrize("missing", ["clip", "flush", "no free flight", "in the cup", "under the rim", "at rest",
+                                     "let go"])
+def test_one_point_zero_is_unreachable_while_any_full_success_condition_is_missing(missing):
+    best, done = _episode(missing)
+    assert best < 1.0 and not done
+    assert _episode(None) == (1.0, True)  # with all of them it is reached
 
 
 def test_moving_offcut_in_the_cup_is_not_one():
@@ -380,7 +455,9 @@ def test_still_in_the_cup_but_held_is_not_full_score():
     assert T.score(s) == 0.5 and not T.success(s)
     T.observe(s, DT, ONE_PAD)  # a finger still touching it: also not let go
     assert T.score(s) == 0.5 and not T.success(s)
-    T.observe(s, DT)  # let go
+    T.observe(s, DT)  # let go: the second starts
+    assert T.score(s) == 0.75 and not T.success(s)
+    _wait(IN_CUP)
     assert T.score(s) == 1.0 and T.success(s)
 
 
@@ -445,7 +522,7 @@ def test_memory_resets():
     T.observe(_scene(top=T.BASE_POINT + (0.3, 0.0, 0.0)), DT)
     assert T.STATE["cut"] and T.STATE["flew"]
     T.reset_memory()
-    assert T.STATE == {"cut": "", "flew": False, "kick": None, "held": False, "touch": False}
+    assert T.STATE == {"cut": "", "flew": False, "kick": None, "held": False, "touch": False, "met": None, "t": 0.0}
 
 
 def test_the_score_ladder():
@@ -467,6 +544,7 @@ def test_the_score_ladder():
         else:
             top = TOP0
         T.observe(_scene(top=top), DT)
+        _wait(top)
         outcomes.add(T.score(_scene(top=top)))
     assert outcomes == {0.0, 0.25, 0.5, 0.75, 1.0}
 
