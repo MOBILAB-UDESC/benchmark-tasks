@@ -132,25 +132,157 @@ def test_start_scores_zero():
     assert T.score(_scene(0.0, 4)) == 0.0 and not T.success(_scene(0.0, 4))
 
 
-@pytest.mark.parametrize("deg, expected", [(5.0, 0.0), (59.9, 0.0), (60.01, 0.5), (119.9, 0.5), (120.01, 1.0),
-                                           (130.0, 1.0)])
+STEP_S = 1.0 / T.CONTROL_HZ
+STILL_STEPS = round(T.STILL_S * T.CONTROL_HZ)  # 20 control steps: 1 s at 20 Hz
+
+
+def _let_go(released=True):
+    """What the step hook records: no finger within 3 mm of the leaf."""
+    T.STATE["released"] = released
+
+
+def _steps(objects, n):
+    """What the step hook does each control step for ``n`` steps in this state (after the snap and the release are
+    read): time the open, still leaf, and run the test push. Returns the push switches asked for."""
+    out = []
+    for _ in range(n):
+        T._remember(objects)
+        a = T.tick(objects, STEP_S)
+        if a:
+            out.append(a)
+    return out
+
+
+def _free_and_tested(start=130.0):
+    """A freed leaf let go at ``start``, still 1 s, then turned back by the test push at its 30 degrees a second."""
+    _let_go()
+    assert _steps(_scene(start), STILL_STEPS) == ["start"]
+    asked = []
+    angle = start
+    while T.STATE["test"] == "running":
+        angle -= T.TEST_SPEED * STEP_S
+        asked += _steps(_scene(angle), 1)
+    return asked, angle
+
+
+@pytest.mark.parametrize("deg, expected", [(5.0, 0.0), (59.9, 0.0), (60.01, 0.5), (119.9, 0.5), (120.01, 0.5),
+                                           (130.0, 0.5)])
 def test_ladder(deg, expected):
+    """The angle alone gives at most 0.5: full credit needs the free-movement test."""
+    _let_go()
     assert T.score(_scene(deg, layers=0)) == expected
 
 
-def test_success_needs_the_leaf_still():
-    assert T.success(_scene(125.0))
-    for kw in ({"vel": (0.05, 0.0, 0.0)}, {"spin": (0.0, 0.0, 1.0)}):
-        moving = _scene(125.0, **kw)
-        assert not T.success(moving) and T.score(moving) == 0.5  # swinging: half, not full
+def test_full_score_needs_release_stillness_and_the_test_push():
+    asked, angle = _free_and_tested()
+    assert asked == ["stop"] and T.STATE["test"] == "passed"
+    assert T.STATE["test_from"] - angle >= T.TEST_DEG and T.STATE["test_s"] <= T.TEST_S
+    assert T.success(_scene(angle)) and T.score(_scene(angle)) == 1.0
+
+
+def test_held_at_120_never_scores_full():
+    """The reviewers' case: a resistant leaf held at 120 degrees or more in a gripper is never tested, so never 1.0."""
+    _let_go(False)
+    held = _scene(125.0)
+    assert _steps(held, 10 * STILL_STEPS) == [] and T.STATE["test"] is None
+    assert not T.success(held) and T.score(held) == 0.5
+
+
+def test_the_second_restarts_on_any_lapse():
+    _let_go()
+    _steps(_scene(125.0), STILL_STEPS - 1)
+    assert T.STATE["test"] is None and T.score(_scene(125.0)) == 0.5
+    for lapse in ({"vel": (0.05, 0.0, 0.0)}, {"spin": (0.0, 0.0, 1.0)}):
+        _steps(_scene(125.0, **lapse), 1)  # swinging for one step
+        assert T.STATE["open_s"] == 0.0
+        _steps(_scene(125.0), STILL_STEPS - 1)
+        assert T.STATE["test"] is None
+    _let_go(False)
+    _steps(_scene(125.0), 1)  # a finger back on the leaf
+    _let_go(True)
+    _steps(_scene(125.0), STILL_STEPS - 1)
+    assert T.STATE["test"] is None
+    assert _steps(_scene(125.0), 1) == ["start"]
+
+
+def test_a_hinge_that_does_not_turn_fails_the_test():
+    """A leaf that the push cannot turn 30 degrees within 3 s (a hinge still held) fails, for good: 0.5."""
+    _let_go()
+    _steps(_scene(125.0), STILL_STEPS)
+    assert T.STATE["test"] == "running"
+    asked = _steps(_scene(110.0), round(T.TEST_S * T.CONTROL_HZ))  # it turns only 15 degrees
+    assert asked == ["stop"] and T.STATE["test"] == "failed"
+    assert _steps(_scene(80.0), 100) == []  # not tested again
+    assert not T.success(_scene(80.0)) and T.score(_scene(80.0)) == 0.5
+
+
+def test_touching_the_leaf_during_the_test_fails_it():
+    _let_go()
+    _steps(_scene(125.0), STILL_STEPS)
+    _let_go(False)
+    assert _steps(_scene(90.0), 1) == ["stop"] and T.STATE["test"] == "failed"
+    _let_go(True)
+    assert T.score(_scene(90.0)) == 0.5
+
+
+def test_no_full_score_while_any_condition_is_missing():
+    """Each full-success condition missing in turn, for 10 s: never 1.0."""
+    cases = {
+        "held (not let go)": (False, _scene(125.0)),
+        "under 120 degrees": (True, _scene(119.0)),
+        "swinging": (True, _scene(125.0, vel=(0.05, 0.0, 0.0))),
+        "turning": (True, _scene(125.0, spin=(0.0, 0.0, 1.0))),
+    }
+    for name, (released, objects) in cases.items():
+        T.reset_memory()
+        _let_go(released)
+        _steps(objects, 10 * T.CONTROL_HZ)
+        assert not T.success(objects) and T.score(objects) < 1.0, name
+
+
+def test_finger_gap():
+    leaf = _scene(0.0)
+    tip = T.LEAF.pos + np.array([T.LEAF_BOX[0] / 2, 0.0, 0.0])
+    side = T.LEAF.pos + np.array([0.0, T.LEAF_BOX[1] / 2, 0.0])
+    assert T.finger_gap(leaf, [tip]) == pytest.approx(0.0, abs=1e-9)
+    assert T.finger_gap(leaf, [side + (0.0, 0.0025, 0.0)]) == pytest.approx(0.0025)
+    assert T.finger_gap(leaf, [side + (0.0, 0.009, 0.0), T.LEAF.pos]) == 0.0
+    assert T.finger_gap(leaf, []) == math.inf and T.finger_gap(leaf, None) == math.inf
+    assert 0.0025 < T.RELEASED_GAP < 0.009
+
+
+def test_step_hook_reads_release_and_runs_the_test(monkeypatch):
+    """watch() reads the fingers, times the second with the run's step and switches the test push on and off."""
+    import sys
+    import types
+
+    import fingers
+
+    state = {"angle": 128.0, "points": [T.LEAF.pos + np.array([0.0, 0.3, 0.0])]}
+    monkeypatch.setitem(sys.modules, "yam_arena.scene",
+                        types.SimpleNamespace(object_states=lambda env, n: _scene(state["angle"])))
+    monkeypatch.setattr(fingers, "finger_points", lambda env: np.asarray(state["points"]))
+    pushes = []
+    monkeypatch.setattr(T, "test_push", lambda name, on: pushes.append(on))
+    env = types.SimpleNamespace(unwrapped=types.SimpleNamespace(step_dt=0.05))
+    T.ROCK.side = 1  # the rocking is over: the leaf stays on one side
+    for _ in range(STILL_STEPS):
+        T.watch(env)
+    assert T.STATE["released"] and pushes == [True] and T.STATE["test"] == "running"
+    while T.STATE["test"] == "running":
+        state["angle"] -= 1.5
+        T.watch(env)
+    assert pushes == [True, False] and T.STATE["test"] == "passed" and T.score(_scene(state["angle"])) == 1.0
 
 
 def test_pushed_to_the_snap_is_zero_for_good():
     assert T.score(_scene(3.4, layers=4)) == 0.0 and not T.STATE["snapped"]  # held, not broken, and still at 0
     assert T.score(_scene(3.6, layers=4)) == 0.0 and T.STATE["snapped"]
     assert T.score(_scene(125.0, layers=0)) == 0.0  # recorded: a later step scores 0 too
+    assert _steps(_scene(125.0), 5 * STILL_STEPS) == [] and T.STATE["test"] is None  # a snapped leaf is never tested
     T.reset_memory()
-    assert T.score(_scene(125.0, layers=0)) == 1.0
+    asked, angle = _free_and_tested(125.0)
+    assert T.score(_scene(angle, layers=0)) == 1.0
 
 
 def test_a_leaf_off_its_hinge_is_snapped():
@@ -274,7 +406,10 @@ def test_demo_rocks_then_sweeps():
     assert T.ROCKS >= len(T.LAYERS) + 1  # more cycles than the rule needs, one in reserve
     assert "left" not in T.demo()
     assert sum(w.duration for w in steps) < 50.0  # steps of 20 Hz: well under the 1,200-step limit
-    assert labels[-1] == "wait for the leaf to settle"
+    assert labels[-1].startswith("wait")
+    # after the hand is up and clear: the 1 s of stillness and the test push (at most TEST_S) fit in the last wait
+    assert steps[-1].duration >= T.STILL_S + T.TEST_S + 1.0
+    assert steps[-1].pos[2] - T.TOP >= 0.09
 
 
 def test_demo_rocks_inside_the_limits():

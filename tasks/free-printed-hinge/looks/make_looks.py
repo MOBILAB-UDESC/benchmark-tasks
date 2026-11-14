@@ -8,9 +8,11 @@ plain cuboid is then hidden but still collides. Every look is built in its box's
 origin, z up) and must fit inside the box (checked when exported).
 
 - ``leaf.usdc``: the orange moving leaf: a 7.5 x 1 x 4 cm plate in PLA with fine layer lines, two screw holes, rounded edges and
-  a neck cut round the hinge, and the knuckle, a 13 mm barrel 24 mm tall between the base leaf's two barrels.
+  a neck round the hinge: a web 1.5 mm thick and 24 mm tall joining the plate to the knuckle, a 13 mm barrel 24 mm tall
+  between the base leaf's two barrels.
 - ``base.usdc``: the dark teal base leaf: a 5 x 1 x 4 cm plate with two screw holes, two bridges and the two outer barrels
-  of the hinge, and the steel pin through all three with its domed head on top.
+  of the hinge, 0.2 mm (one layer) above and below the knuckle. Its 5 mm pin is printed with it, inside the barrels,
+  so it does not show.
 - ``card.usdc``: a 28 x 17 cm card, light grey, printed with a protractor round the hinge: ticks every 5 degrees, the
   numbers 0 to 180 every 30, and the part past 60 and past 120 degrees tinted amber and green.
 
@@ -46,7 +48,8 @@ BASE_LEN = 0.05
 HINGE_IN_BASE = (BASE[0] / 2 - KNUCKLE[0] / 2, 0.0)  # the hinge axis, 7 mm from the base box's right end
 CARD_HINGE = (0.0, -0.04)  # the hinge axis in the card's frame
 BARREL_R = 0.0065
-GAP = 0.0005  # print-in-place clearance between the barrels
+GAP = 0.0002  # print-in-place clearance between the barrels: one 0.2 mm layer, which the printer bridges and fuses
+NECK_WEB = 0.0015  # the web that joins the leaf's plate to its knuckle: where a forced leaf snaps
 ORANGE = (0.95, 0.42, 0.04)
 TEAL = (0.06, 0.27, 0.31)
 
@@ -300,16 +303,21 @@ def build_leaf():
     L.holes(plate, [(x0 + 0.0085, 0.0), (x0 + 0.0635, 0.0)], 0.0028, 0.03)
     # the neck: the plate's top and bottom are cut away round the hinge, where the base leaf's barrels and bridges reach in
     band = (KNUCKLE[2] / 2, PLATE_H / 2 + 0.001)
+    web = NECK_WEB / 2  # and its sides, down to the web
     cut_boxes(L, plate, [((x0 - 0.001, -0.01, band[0]), (x0 + 0.0185, 0.01, band[1])),
-                         ((x0 - 0.001, -0.01, -band[1]), (x0 + 0.0185, 0.01, -band[0]))])
+                         ((x0 - 0.001, -0.01, -band[1]), (x0 + 0.0185, 0.01, -band[0])),
+                         ((x0 - 0.001, web, -band[1]), (x0 + 0.0185, 0.01, band[1])),
+                         ((x0 - 0.001, -0.01, -band[1]), (x0 + 0.0185, -web, band[1]))])
     L.cyl_z("knuckle", hx, 0.0, -KNUCKLE[2] / 2, KNUCKLE[2] / 2, BARREL_R, pla, bevel=0.0008, uv=(40.0, 100.0))
+    # the web reaches into the knuckle, so the two are one piece
+    L.box("web", (hx + BARREL_R - 0.001, -web, -KNUCKLE[2] / 2 + 0.0004), (x0 + 0.0005, web, KNUCKLE[2] / 2 - 0.0004), pla,
+          uv=(20.0, 100.0))
     return L
 
 
 def build_base():
     L = Look("base", BASE)
     pla = material("base_pla", srgb(TEAL), 0.42, image=layer_texture("base_layers", TEAL))
-    steel = material("hinge_pin", srgb((0.74, 0.75, 0.78)), 0.25, 1.0)
     hx, hy = HINGE_IN_BASE
     x0 = -BASE[0] / 2
     plate = L.box("plate", (x0, -PLATE_T / 2, -PLATE_H / 2), (x0 + BASE_LEN, PLATE_T / 2, PLATE_H / 2), pla,
@@ -320,13 +328,7 @@ def build_base():
         L.box(f"bridge_{tag}", (x0 + BASE_LEN - 0.002, -PLATE_T / 2, z0), (hx, PLATE_T / 2, z1), pla, bevel=0.0008,
               uv=(20.0, 100.0))
         L.cyl_z(f"barrel_{tag}", hx, hy, z0, z1, BARREL_R, pla, bevel=0.0006, uv=(40.0, 100.0))
-    # the pin: a 3 mm steel rod through the three barrels, its head a low dome on the top one
-    L.cyl_z("pin", hx, hy, -PLATE_H / 2 + 0.0005, PLATE_H / 2 - 0.0006, 0.0015, steel)
-    bm = bmesh.new()
-    bmesh.ops.create_uvsphere(bm, u_segments=24, v_segments=8, radius=0.0032)
-    bmesh.ops.scale(bm, vec=(1, 1, 0.25), verts=bm.verts)
-    bmesh.ops.translate(bm, vec=(hx, hy, PLATE_H / 2 - 0.0008), verts=bm.verts)
-    L.mesh("pin_head", bm, steel, smooth=True)
+    # the pin is printed with the barrels, inside them: nothing of it shows
     return L
 
 

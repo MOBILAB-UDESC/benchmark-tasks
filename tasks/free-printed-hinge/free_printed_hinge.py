@@ -5,7 +5,9 @@ under them is a printed protractor, 0 degrees along the leaves, the leaf swingin
 fused: the orange leaf does not turn.
 
 The task: free the hinge, so the orange leaf swings round through 120 degrees or more and stays there, without
-snapping it off.
+snapping it off. Full credit also needs the hinge shown to be free: once the leaf has been let go at 120 degrees or
+more and has lain still for 1 s, the scorer's test push (a gauge's push: at most 0.0325 N m, 0.5 N at 6.5 cm, at 30
+degrees a second, toward closing) must turn it back 30 degrees within 3 s with nothing touching it.
 
 The hinge (``bonds.Hinged``): four stuck layers hold the leaf at 0, each a joint at the hinge whose twist is a
 torsion spring (2 N m/rad, 8 N m/rad in all) capped at 0.2 N m, so the leaf gives about 1.8 degrees at 0.25 N m and
@@ -27,7 +29,7 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 import numpy as np  # noqa: E402
-from bonds import Hinged, hinge_angle, on_reset, on_step, snap, unstick  # noqa: E402
+from bonds import Hinged, hinge_angle, on_reset, on_step, snap, test_push, unstick  # noqa: E402
 from colliders import Part, shape, shapes  # noqa: E402
 from looks import dress  # noqa: E402
 from yam_arena.demo import FINGER_CLOSED, FINGER_OPEN, Waypoint  # noqa: E402
@@ -35,7 +37,8 @@ from yam_arena.task_file import TABLE_TOP, Box  # noqa: E402
 
 SCENE = "station"
 TOP = TABLE_TOP[SCENE]
-SUCCESS_HOLD_S = 1.0
+SUCCESS_HOLD_S = 0.0  # success() needs the free-movement test passed, after 1 s let go and still: timed below
+CONTROL_HZ = 20  # the control rate the task is run at, for offline checks (a run reads its own step time)
 
 # -- the hinge: its vertical axis, the plates' size, and how high they stand --------------------------------------------
 HX, HY = 0.34, -0.12  # the hinge axis (x, y)
@@ -58,6 +61,16 @@ STUCK_TORQUE = sum(cap for _, _, cap in LAYERS)
 SNAP_TORQUE = 0.49  # N m the layers hold the leaf with, at which it snaps off
 ON_DEG = 0.9  # a push counts when the leaf turns this far, either way
 HINGE_STOPS = (-12.0, 130.0)  # degrees: the leaf's range: 12 back, and a stop at 130 round, where it nears the base leaf
+# The free-movement test, after the leaf has been let go at 120 degrees or more and lain still for 1 s: a push toward
+# closing at TEST_SPEED, with at most TEST_TORQUE (a force gauge's 0.5 N at 6.5 cm from the axis), must turn the leaf
+# back TEST_DEG within TEST_S, with no finger near it. A free hinge turns at once; one still held by a layer (0.2 N m,
+# six times the push) does not move.
+TEST_GRIP_R = 0.065  # m from the axis: where the gauge pushes in a real trial (the hole at the leaf's end)
+TEST_FORCE = 0.5  # N, at most, on the gauge
+TEST_TORQUE = TEST_FORCE * TEST_GRIP_R  # 0.0325 N m
+TEST_SPEED = 30.0  # degrees a second
+TEST_DEG = 30.0  # degrees the leaf must turn back
+TEST_S = 3.0  # s the push may take
 
 # The base leaf is one box: the plate and the two outer barrels of the hinge (drawn, not colliding), 6.9 cm long, 1.3 cm
 # thick. Only the plate collides.
@@ -68,7 +81,8 @@ shape("base", [Part("plate", (-BASE_BOX[0] / 2 + BASE_LEN / 2, 0.0, 0.0), (BASE_
 
 # The orange leaf is one box too: the plate from 7 mm off the axis and the knuckle round the axis. It collides as those two.
 LEAF = Hinged("leaf", pos=(LEAF_X, HY, ZC), size=LEAF_BOX, mass=0.05, color=(0.95, 0.45, 0.05), to="base", axis="Z",
-              hinge=(HX - LEAF_X, 0.0, 0.0), lower=HINGE_STOPS[0], upper=HINGE_STOPS[1], damping=0.002, layers=LAYERS)
+              hinge=(HX - LEAF_X, 0.0, 0.0), lower=HINGE_STOPS[0], upper=HINGE_STOPS[1], damping=0.002, layers=LAYERS,
+              push=(TEST_TORQUE, TEST_SPEED))
 shape("leaf", [Part("plate", (LEAF_BOX[0] / 2 - LEAF_LEN / 2, 0.0, 0.0), (LEAF_LEN, PLATE_T, PLATE_H)),
                Part("knuckle", (HX - LEAF_X, 0.0, 0.0), KNUCKLE_SIZE)])
 CARD_SIZE = (0.28, 0.17, CARD_T)
@@ -85,10 +99,16 @@ dress(LOOKS)
 FULL_DEG = 120.0  # the leaf round this far, at rest: freed and swinging
 HALF_DEG = 60.0
 SEAT_TOL = 0.008  # m: the leaf's centre this far off its place on the hinge: it has come off
+RELEASED_GAP = 0.003  # m: every gripper finger at least this far from the leaf: let go
+STILL_S = 1.0  # s: let go at 120 degrees or more and still this long, without a break, before the test push
 
-# What the episode remembers: how many layers are still on (one switches off per rocking cycle) and whether the leaf
-# snapped off. A snapped leaf scores 0 for the rest of the trial.
-STATE = {"layers": len(LAYERS), "snapped": False}
+# What the episode remembers: how many layers are still on (one switches off per rocking cycle), whether the leaf
+# snapped off (it scores 0 for the rest of the trial), whether every finger was clear of the leaf at the last step
+# (from the step hook: nothing is clear before a step has run), how long the leaf has lain open, let go and still
+# without a break (s), and the free-movement test: None (not started), "running", "passed" or "failed", the angle it
+# started from and how long it has run.
+STATE = {"layers": len(LAYERS), "snapped": False, "released": False, "open_s": 0.0, "test": None, "test_from": 0.0,
+         "test_s": 0.0}
 
 
 class Rocking:
@@ -123,7 +143,7 @@ ROCK = Rocking()
 
 @on_reset
 def reset_memory(env=None) -> None:
-    STATE.update(layers=len(LAYERS), snapped=False)
+    STATE.update(layers=len(LAYERS), snapped=False, released=False, open_s=0.0, test=None, test_from=0.0, test_s=0.0)
     ROCK.reset()
 
 
@@ -171,10 +191,63 @@ def _remember(objects) -> None:
         STATE["snapped"] = True
 
 
+def finger_gap(objects, fingers) -> float:
+    """The closest any finger point comes to the leaf's box (plate and knuckle) (m): 0 inside or touching it.
+    ``fingers`` is (n, 3) points on the grippers' finger meshes, from ``fingers.py``."""
+    if fingers is None or len(fingers) == 0:
+        return math.inf
+    leaf = objects["leaf"]
+    local = (np.asarray(fingers, float) - leaf.pos) @ _rot(leaf.quat_xyzw)
+    return float(np.min(np.linalg.norm(np.maximum(np.abs(local) - np.asarray(LEAF_BOX) / 2, 0.0), axis=1)))
+
+
+def open_now(objects) -> bool:
+    """Not snapped, the leaf round 120 degrees or more, let go by every finger, and still (under 10 mm/s and
+    0.5 rad/s)."""
+    return bool(_finite(objects) and not STATE["snapped"] and STATE["released"]
+                and leaf_angle(objects) >= FULL_DEG and objects["leaf"].resting())
+
+
+def tick(objects, dt: float):
+    """Once per control step (from the step hook), after the snap and the release are read: time the open, let-go,
+    still leaf (any lapse starts the second over), start the test push once that has held STILL_S, and judge the push.
+    Returns "start" or "stop" when the push must be switched on or off, else None."""
+    test = STATE["test"]
+    if STATE["snapped"]:
+        STATE["open_s"] = 0.0
+        if test == "running":
+            STATE["test"] = "failed"
+            return "stop"
+        return None
+    if test is None:
+        STATE["open_s"] = STATE["open_s"] + dt if open_now(objects) else 0.0
+        if STATE["open_s"] >= STILL_S - 1e-6:
+            STATE.update(test="running", test_from=leaf_angle(objects), test_s=0.0)
+            return "start"
+        return None
+    if test != "running":
+        return None
+    STATE["test_s"] += dt
+    if not STATE["released"]:
+        STATE["test"] = "failed"  # something touched the leaf during the push
+    elif STATE["test_from"] - leaf_angle(objects) >= TEST_DEG:
+        STATE["test"] = "passed"
+    elif STATE["test_s"] >= TEST_S - 1e-6:
+        STATE["test"] = "failed"
+    return None if STATE["test"] == "running" else "stop"
+
+
+def _step_s(env) -> float:
+    """The control step (s) of a run, 1 / CONTROL_HZ when the env does not say."""
+    dt = getattr(getattr(env, "unwrapped", env), "step_dt", None)
+    return float(dt) if dt else 1.0 / CONTROL_HZ
+
+
 @on_step
 def watch(env) -> None:
-    """Every control step: the rocking rule (switch a layer off per cycle) and the break (switch the hinge off). Between the
-    scored steps too."""
+    """Every control step: the rocking rule (switch a layer off per cycle), the break (switch the hinge off), whether
+    the fingers are clear of the leaf, and the free-movement test (``tick``). Between the scored steps too."""
+    from fingers import finger_points
     from yam_arena.scene import object_states
 
     objects = object_states(env, list(NAMES))
@@ -185,6 +258,15 @@ def watch(env) -> None:
         snap("leaf")
     elif ROCK.update(leaf_angle(objects)) and STATE["layers"] > 0:
         STATE["layers"] = unstick("leaf")
+        print(f"[free_printed_hinge] layer off: {STATE['layers']} left (angle {leaf_angle(objects):.1f} deg)", flush=True)
+    STATE["released"] = finger_gap(objects, finger_points(env)) >= RELEASED_GAP
+    before = STATE["test"]
+    action = tick(objects, _step_s(env))
+    if action is not None:
+        test_push("leaf", action == "start")
+    if STATE["test"] != before:
+        print(f"[free_printed_hinge] free-movement test {STATE['test']} at {leaf_angle(objects):.1f} deg "
+              f"(started at {STATE['test_from']:.1f} deg, {STATE['test_s']:.2f} s)", flush=True)
 
 
 def _zero(objects) -> bool:
@@ -195,10 +277,12 @@ def _zero(objects) -> bool:
 
 
 def success(objects) -> bool:
-    """The leaf round 120 degrees or more and still, never snapped."""
+    """Never snapped, and the free-movement test passed: the leaf was let go at 120 degrees or more, lay still for 1 s
+    without a break, and then the test push (at most 0.0325 N m) turned it back 30 degrees within 3 s with no finger
+    near it."""
     if _zero(objects):
         return False
-    return bool(leaf_angle(objects) >= FULL_DEG and objects["leaf"].resting())
+    return STATE["test"] == "passed"
 
 
 def distance(objects) -> float:
@@ -207,8 +291,9 @@ def distance(objects) -> float:
 
 
 def score(objects) -> float:
-    """1.0: success. 0.5: the leaf round 60 degrees or more at the end. 0 otherwise, and 0 for the rest of the trial once
-    the leaf has snapped off (its layers holding it with 0.49 N m or more, or 8 mm off its hinge)."""
+    """1.0: success (the free-movement test passed). 0.5: the leaf round 60 degrees or more at the end (held there,
+    still moving, not yet tested, or the test failed). 0 otherwise, and 0 for the rest of the trial once the leaf has
+    snapped off (its layers holding it with 0.49 N m or more, or 8 mm off its hinge)."""
     if _zero(objects):
         return 0.0
     if success(objects):
@@ -285,6 +370,6 @@ def demo():
         w(0.5, (x, y, TOP + POKE_H), FINGER_CLOSED, "hold", 55.0),
         w(0.8, (ax, ay, TOP + POKE_H), FINGER_CLOSED, "back off", 55.0),
         w(1.0, (ax, ay, TOP + 0.10), FINGER_OPEN, "up", 0.0),
-        w(3.0, (ax, ay, TOP + 0.10), FINGER_OPEN, "wait for the leaf to settle", 0.0),
+        w(6.0, (ax, ay, TOP + 0.10), FINGER_OPEN, "wait: the leaf settles, then the scorer's test push", 0.0),
     ]
     return {"right": grip + rock + steps}

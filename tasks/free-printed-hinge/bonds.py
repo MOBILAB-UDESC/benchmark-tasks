@@ -10,7 +10,10 @@ yam_arena's task files spawn plain primitives. This module adds one box that get
   add up. :func:`unstick` switches the next layer off, for the rest of the episode (every reset switches them all on
   again), so the hinge's grip falls in steps until it turns freely. A print-in-place hinge that the printer fused: the
   more it is worked, the looser it gets. :func:`snap` breaks the box off: its hinge and every layer are switched off, for
-  the rest of the episode (every reset switches them on again), and it is a free body.
+  the rest of the episode (every reset switches them on again), and it is a free body. ``push`` (torque cap in N m,
+  speed in degrees a second) adds a test push: one more joint at the hinge, off when it spawns, whose twist is driven
+  at that speed toward ``lower`` with at most that torque. :func:`test_push` switches it on and off: a light, slow
+  push like a force gauge's, which turns a free hinge and cannot turn one that holds harder than the cap.
 
 :func:`hinge_angle` reads a box's turn about a hinge axis from two orientations.
 
@@ -34,7 +37,7 @@ from dataclasses import dataclass
 from yam_arena.task_file import Box
 
 __all__ = ["Hinged", "axis_frame", "hinge_angle", "install", "on_reset", "on_spawn", "on_step", "snap",
-           "snapped", "stuck_layers", "unstick"]
+           "snapped", "stuck_layers", "test_push", "unstick"]
 
 _AXES = ("X", "Y", "Z")
 
@@ -54,6 +57,7 @@ class Hinged(Box):
     upper: float = 0.0
     damping: float = 0.01
     layers: tuple[tuple[float, float, float], ...] = ()
+    push: tuple[float, float] = ()
 
     def _check(self) -> None:
         super()._check()
@@ -65,6 +69,8 @@ class Hinged(Box):
             raise ValueError(f"{self.name}: lower <= 0 <= upper is where it spawns, and the range must not be empty")
         if self.damping < 0 or any(k <= 0 or d < 0 or c <= 0 for k, d, c in self.layers):
             raise ValueError(f"{self.name}: damping must not be negative, a layer's stiffness and cap must be positive, its damping not negative")
+        if self.push and (len(self.push) != 2 or self.push[0] <= 0 or self.push[1] <= 0):
+            raise ValueError(f"{self.name}.push must be (torque cap > 0, speed > 0)")
         if self.to and not self.to.isidentifier():
             raise ValueError(f"{self.name}.to must name an object")
 
@@ -121,6 +127,7 @@ _SPAWN: dict = {}
 _SPAWNED: list = []  # callbacks run on every task-file box as it spawns
 _OFF: dict[str, int] = {}  # how many layers of each hinge are switched off
 _SNAPPED: set[str] = set()
+_PUSHING: set[str] = set()  # hinged boxes whose test push is on
 
 
 def _anchor(joint, prim, spec, anchor) -> None:
@@ -196,6 +203,29 @@ def _hinge(prim, spec: Hinged) -> None:
         layer.CreateLocalRot0Attr(Gf.Quatf(w, x, y, z))
         layer.CreateCollisionEnabledAttr(False)
         _angular_drive(layer, stiffness, damping, cap, "rotX")
+    if spec.push:
+        _test_joint(prim, spec, frame)
+
+
+PUSH_DAMPING = 1.0  # N m s/rad: the test push's velocity drive, stiff enough that its cap is what limits it
+
+
+def _test_joint(prim, spec: Hinged, frame) -> None:
+    """The test push: a generic joint at the hinge, free in every way, its twist driven at ``spec.push[1]`` degrees a
+    second toward ``lower`` with at most ``spec.push[0]`` N m. Off when it spawns."""
+    from pxr import Gf, UsdPhysics
+
+    cap, speed = spec.push
+    joint = UsdPhysics.Joint.Define(prim.GetStage(), prim.GetPath().AppendChild("push"))
+    _anchor(joint, prim, spec, _anchor_point(spec))
+    turn = joint.GetLocalRot0Attr().Get()
+    joint.CreateLocalRot1Attr(Gf.Quatf(*frame))
+    w, x, y, z = _quat_mul_wxyz((turn.GetReal(), *turn.GetImaginary()), frame)
+    joint.CreateLocalRot0Attr(Gf.Quatf(w, x, y, z))
+    joint.CreateCollisionEnabledAttr(False)
+    _angular_drive(joint, 0.0, PUSH_DAMPING, cap, "rotX")
+    UsdPhysics.DriveAPI(joint.GetPrim(), "rotX").GetTargetVelocityAttr().Set(-float(speed))  # deg/s, toward lower
+    joint.CreateJointEnabledAttr(False)
 
 
 def _spawn_cuboid(prim_path: str, cfg, translation=None, orientation=None, **kwargs):
@@ -263,7 +293,18 @@ def snap(name: str) -> None:
     _set_enabled(prim.GetChild("hinge"), False)
     for k in range(len(_SPECS[name].layers)):
         _set_enabled(prim.GetChild(f"stuck{k}"), False)
+    if name in _PUSHING:
+        test_push(name, False)
     _SNAPPED.add(name)
+
+
+def test_push(name: str, on: bool) -> None:
+    """Switch the test push of the hinged box ``name`` on or off (every reset switches it off)."""
+    if name not in _PRIMS:
+        raise KeyError(f"{name} has not spawned (test_push() runs inside the simulation)")
+    if _SPECS[name].push:
+        _set_enabled(_PRIMS[name].GetChild("push"), on)
+        (_PUSHING.add if on else _PUSHING.discard)(name)
 
 
 def snapped(name: str) -> bool:
@@ -282,8 +323,11 @@ def _restore(env=None) -> None:
             continue
         for k in range(off):
             _set_enabled(_PRIMS[name].GetChild(f"stuck{k}"), True)
+    for name in list(_PUSHING):
+        _set_enabled(_PRIMS[name].GetChild("push"), False)
     _OFF.clear()
     _SNAPPED.clear()
+    _PUSHING.clear()
 
 
 # -- hooking yam_arena -----------------------------------------------------------------------------------------------
