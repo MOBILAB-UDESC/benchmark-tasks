@@ -1,11 +1,11 @@
 # Squeeze both release buttons and slide the battery off the drill
 
-Taking the battery pack off a cordless drill, the way an e-waste recycler does before the tool goes to the shredder
-(lithium packs must come out first). The pack is locked on the handle's foot by two release buttons, one on each
-face across the pack, and lets go only while both are pressed at once. A parallel gripper closing across the pack
-presses both, the way a person squeezes them between thumb and finger. The pack then slides off along the handle
-against the friction of its rails, so the other hand has to hold the drill or it slides along with the pack. The
-pack goes in a tray.
+Taking the battery pack off a cordless drill to charge it or to swap in a charged spare, a familiar household chore
+(the charger takes the pack, not the drill). The pack is locked on the handle's foot by two release buttons, one on
+each face across the pack, and lets go only while both are pressed at once. A parallel gripper closing across the
+pack presses both, the way a person squeezes them between thumb and finger. The pack then slides off along the
+handle against the friction of its rails, so the other hand has to hold the drill or it slides along with the pack.
+The pack goes in a tray.
 
 | File | What it is |
 |---|---|
@@ -70,7 +70,7 @@ inspect-robots run --embodiment yam_arena --policy yam_scripted \
   holds it. The left arm comes down over the pack with its fingers closing across it, which presses both buttons
   (2.3 to 2.7 mm in), pulls 7 cm along the handle toward the robot (the pack comes off its foot after 4 cm), lifts it,
   carries it to the tray, lowers it and lets go. The right arm lets go of the drill once the pack is up. As the
-  fingers open, the pack, held slightly tilted with one edge on the floor, settles flat on the tray's floor; every
+  fingers open, the pack, held slightly tilted with one edge on the floor, settles flat on the tray's floor. Every
   condition for full score holds from step 239 (11.95 s, every finger 3.1 mm from the pack), and the run reaches 1.0
   and ends on success at step 258 (12.9 s at 20 Hz), 1 s later, with every finger 44 mm from the pack. The drill moves
   at most 4 mm (2.5 mm at the end). A trial takes about 90 s on an L40S, including startup.
@@ -119,7 +119,20 @@ and the pack does not move for 1 s (30 frames) afterwards. The squeeze is seen i
 
 ## Revision notes
 
-The first review asked: "Revise the full-score predicate so the pack must be released, resting on the tray floor,
+The latest review (2026-11-14) raised only Importance: "Change the category to societal relatability and explain the
+familiar household context of removing a cordless drill battery for charging or replacement. The cited employment
+total includes many hand laborers who do not routinely remove batteries from e-waste, so it does not establish the
+jobs-domain threshold."
+
+- The category is now Societal relevance.
+- The task is framed by the household case: the pack comes off to be charged (the charger takes the pack, not the
+  drill) or to swap in a charged spare when it runs flat partway through a job. The opening of this README, the
+  context in `task.json` and the keywords say so. The e-waste and employment claims are gone.
+- The scene, the scoring and the demo did not change, so the scores stand: demo 1.0 at step 258, Dream-1 0.0.
+- New media: the demo video now ends with close views of the release, the pack on the tray floor inside the walls,
+  and the timed second, each condition shown with the simulator's values.
+
+The first review (2026-11-12) asked: "Revise the full-score predicate so the pack must be released, resting on the tray floor,
 and fully inside the tray walls; retain partial credit for a removed pack that has not been placed successfully."
 
 - Released: every point of every gripper finger at least 3 mm from the pack and its buttons, measured each control
