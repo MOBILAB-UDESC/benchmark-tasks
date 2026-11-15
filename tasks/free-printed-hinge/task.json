@@ -19,5 +19,5 @@
   "reset_notes": "Use a fresh fused print from a checked batch for each trial (rocking frees the hinge for good, and a freed hinge cannot be fused again), standing with the leaf at 0 degrees along the base leaf. A snapped leaf is thrown away with its print.",
   "fidelity": "Rigid bodies, 240 Hz physics, 20 Hz control. The fusing is a programmed rule, not plastic physics: four layers, each a torsion spring (2 N m/rad, capped at 0.2 N m) at the hinge, hold the leaf, and one switches off per rocking cycle. The leaf snaps off when the layers hold it with 0.49 N m (the web's strength). The test push is a capped velocity drive at the hinge. Plates collide as boxes (the neck as the full plate). The meshes are drawn on them.",
   "scores": "Dream-1 run: 0.0 (both arms draw back near their bases and never reach the hinge; the leaf stays shut), demo: 1.0 (success at step 615, after the free-movement test)",
-  "media": "M-6EU7NR"
+  "media": "M-YFKMMR"
 }
